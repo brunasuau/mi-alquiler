@@ -55,14 +55,14 @@ function generateReceipt({ tenantName, unit, month, date }) {
   d.save(`Rebut_${tenantName.replace(/ /g,"_")}_${month.replace(/ /g,"_")}.pdf`);
 }
 
-function checkAnniversaries(tenants) {
+function checkIPC(tenants) {
   const now=new Date(); const alerts=[];
   tenants.forEach(ten=>{
     if(!ten.contractStart)return;
     const start=new Date(ten.contractStart);
     if(start.getDate()===now.getDate()&&start.getMonth()===now.getMonth()){
       const years=now.getFullYear()-start.getFullYear();
-      if(years>0)alerts.push({tenant:ten,years,type:"anniversary"});
+      if(years>0)alerts.push({tenant:ten,years,type:"ipc"});
       if(years===0)alerts.push({tenant:ten,years:0,type:"signed_today"});
     }
     if(ten.contractEnd){
@@ -94,7 +94,7 @@ const T={
     incomeMonth:"Ingreso mensual",paidCount:"Pagos recibidos",activeTenants:"Inquilinos activos",
     pendingMaint:"Mantenimiento pendiente",recentIncidents:"Incidencias recientes",hello:"Hola",
     contractStart:"Inicio contrato",contractEnd:"Fin contrato",editTenant:"Editar inquilino",
-    contractAnniversary:"Aniversario de contrato",notifications:"Notificaciones",
+    contractAnniversary:"Subida de IPC",notifications:"Notificaciones",
     noNotifications:"Sin notificaciones",contractSigned:"Contrato firmado el",
     yearsAgo:"año(s)",contractExpires:"Contrato expira el",editData:"Editar datos",
   },
@@ -116,7 +116,7 @@ const T={
     incomeMonth:"Monthly income",paidCount:"Payments received",activeTenants:"Active tenants",
     pendingMaint:"Pending maintenance",recentIncidents:"Recent issues",hello:"Hello",
     contractStart:"Contract start",contractEnd:"Contract end",editTenant:"Edit tenant",
-    contractAnniversary:"Contract anniversary",notifications:"Notifications",
+    contractAnniversary:"IPC Rent Increase",notifications:"Notifications",
     noNotifications:"No notifications",contractSigned:"Contract signed on",
     yearsAgo:"year(s)",contractExpires:"Contract expires on",editData:"Edit data",
   },
@@ -138,7 +138,7 @@ const T={
     incomeMonth:"الدخل الشهري",paidCount:"المدفوعات المستلمة",activeTenants:"المستأجرون النشطون",
     pendingMaint:"صيانة معلقة",recentIncidents:"البلاغات الأخيرة",hello:"مرحباً",
     contractStart:"بداية العقد",contractEnd:"نهاية العقد",editTenant:"تعديل المستأجر",
-    contractAnniversary:"ذكرى العقد",notifications:"الإشعارات",
+    contractAnniversary:"زيادة IPC",notifications:"الإشعارات",
     noNotifications:"لا توجد إشعارات",contractSigned:"تم توقيع العقد في",
     yearsAgo:"سنة",contractExpires:"ينتهي العقد في",editData:"تعديل البيانات",
   }
@@ -323,7 +323,7 @@ export default function App() {
 
   const t=T[lang||"es"];
   const isOwner=profile?.role==="owner";
-  const anniversaries=isOwner?checkAnniversaries(tenants):[];
+  const anniversaries=isOwner?checkIPC(tenants):[];
 
   useEffect(()=>{
     const unsub=onAuthStateChanged(auth,async(u)=>{
@@ -470,7 +470,7 @@ export default function App() {
                       ?<div style={{fontSize:13,color:"var(--warm)"}}>{t.noNotifications}</div>
                       :anniversaries.map((a,i)=>(
                         <div key={i} className="notif-item">
-                          {a.type==="anniversary"&&`🎂 ${a.tenant.name} · ${a.years} ${t.yearsAgo} · ${a.tenant.contractStart}`}
+                          {a.type==="ipc"&&`📈 ${a.tenant.name} · Subida IPC (${a.years} año/s) · desde ${a.tenant.contractStart}`}
                           {a.type==="signed_today"&&`📝 ${a.tenant.name} · ${t.contractSigned} ${a.tenant.contractStart}`}
                           {a.type==="expiring"&&`⚠️ ${a.tenant.name} · ${t.contractExpires} ${a.tenant.contractEnd} (${a.daysLeft} días)`}
                         </div>
@@ -489,12 +489,12 @@ export default function App() {
               <div className="al-icon">{a.type==="expiring"?"⚠️":"🎂"}</div>
               <div>
                 <div className="al-title">
-                  {a.type==="anniversary"&&`${t.contractAnniversary} · ${a.tenant.name}`}
+                  {a.type==="ipc"&&`${t.contractAnniversary} · ${a.tenant.name}`}
                   {a.type==="signed_today"&&`📝 ${a.tenant.name}`}
                   {a.type==="expiring"&&`${t.contractExpires} · ${a.tenant.name}`}
                 </div>
                 <div className="al-sub">
-                  {a.type==="anniversary"&&`${a.years} ${t.yearsAgo} · ${a.tenant.contractStart}`}
+                  {a.type==="ipc"&&`Lleva ${a.years} año/s · Revisa el IPC · Contrato desde ${a.tenant.contractStart}`}
                   {a.type==="signed_today"&&`${t.contractSigned} ${a.tenant.contractStart}`}
                   {a.type==="expiring"&&`${a.tenant.contractEnd} · ${a.daysLeft} días restantes`}
                 </div>
@@ -743,7 +743,7 @@ function CalendarPage({t,tenants}){
             {events[selected].map((e,i)=>(
               <div key={i} style={{fontSize:14,marginBottom:4}}>
                 {e.type==="start"&&`🟢 ${e.name} — Inicio de contrato`}
-                {e.type==="anniversary"&&`🎂 ${e.name} — Aniversario`}
+                {e.type==="anniversary"&&`📈 ${e.name} — Subida IPC`}
                 {e.type==="end"&&`🔴 ${e.name} — Fin de contrato`}
               </div>
             ))}
