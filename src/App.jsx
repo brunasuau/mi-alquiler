@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, LineChart, Line } from "recharts";
 import { auth, db } from "./firebase";
 import {
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -320,6 +321,7 @@ export default function App() {
   const [saving,setSaving]=useState(false);
   const [tenants,setTenants]=useState([]);
   const [showNotif,setShowNotif]=useState(false);
+  const [sidebarOpen,setSidebarOpen]=useState(true);
 
   const t=T[lang||"es"];
   const isOwner=profile?.role==="owner";
@@ -442,22 +444,25 @@ export default function App() {
   return(
     <><style>{css}</style>
       <div className="app">
-        <aside className="sidebar">
-          <div className="s-logo">Mi<em>Alquiler</em></div>
-          <div className="s-role">{isOwner?t.owner:t.tenant}</div>
+        <aside className="sidebar" style={{width:sidebarOpen?"220px":"64px",transition:"width .25s",overflow:"hidden"}}> 
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 6px 0 10px",marginBottom:4}}>
+            {sidebarOpen&&<div className="s-logo">Mi<em>Alquiler</em></div>}
+            <button onClick={()=>setSidebarOpen(v=>!v)} style={{background:"none",border:"none",color:"var(--warm)",cursor:"pointer",fontSize:18,padding:"4px 6px",marginLeft:"auto"}}>{sidebarOpen?"◀":"▶"}</button>
+          </div>
+          {sidebarOpen&&<div className="s-role">{isOwner?t.owner:t.tenant}</div>}
           <nav className="s-nav">
             {nav.map(item=>(
-              <button key={item.id} className={activeClass(item.id)} onClick={()=>setPage(item.id)}>
-                <span>{item.icon}</span> {item.label}
+              <button key={item.id} className={activeClass(item.id)} onClick={()=>setPage(item.id)} title={item.label}>
+                <span>{item.icon}</span>{sidebarOpen&&" "+item.label}
               </button>
             ))}
           </nav>
           <div className="s-footer">
             <div className="av av-sm" style={{background:getColor(profile?.name||"")}}>{initials(profile?.name||"?")}</div>
-            <div className="s-user-info">
+            {sidebarOpen&&<div className="s-user-info">
               <strong>{profile?.name||user.email}</strong>
               <span>{isOwner?t.owner:profile?.unit}</span>
-            </div>
+            </div>}
             {isOwner&&(
               <div className="notif-wrap">
                 <button className="notif-btn" onClick={e=>{e.stopPropagation();setShowNotif(v=>!v);}}>
@@ -482,7 +487,7 @@ export default function App() {
             <button className="logout-btn" onClick={()=>signOut(auth)} title={t.logout}>↩</button>
           </div>
         </aside>
-        <main className="content fade" key={page} onClick={()=>setShowNotif(false)}>
+        <main className="content fade" key={page} style={{marginLeft:sidebarOpen?"220px":"64px",transition:"margin-left .25s"}} onClick={()=>setShowNotif(false)}>
           {saving&&<div className="saving">{t.saving}</div>}
           {isOwner&&anniversaries.length>0&&page==="dashboard"&&anniversaries.map((a,i)=>(
             <div key={i} className="alert-banner">
@@ -619,9 +624,40 @@ function Tenants({t,tenants,onSelect,onNew,onEdit}){
 
 function Finances({t,tenants,onToggle,onAddCost}){
   const months=["Enero 2025","Febrero 2025","Marzo 2025"];
+
+  // Build chart data per month
+  const chartData=months.map(m=>{
+    const ingresos=tenants.filter(ten=>(ten.payments||{})[m]?.paid).reduce((s,ten)=>s+(ten.rent||0),0);
+    const gastos=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m).reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const profit=ingresos-gastos;
+    return{name:m.split(" ")[0],Ingresos:ingresos,Gastos:gastos,Profit:profit};
+  });
+
   return(
     <div>
       <div className="page-hd"><h2>{t.finances}</h2></div>
+      <div className="card">
+        <div className="card-title">📊 Resumen financiero</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={chartData} margin={{top:8,right:16,left:0,bottom:0}}>
+            <XAxis dataKey="name" tick={{fontSize:12}}/>
+            <YAxis tick={{fontSize:12}} unit="€"/>
+            <Tooltip formatter={v=>v+"€"}/>
+            <Legend/>
+            <Bar dataKey="Ingresos" fill="#7A9E7E" radius={[6,6,0,0]}/>
+            <Bar dataKey="Gastos" fill="#D94F3D" radius={[6,6,0,0]}/>
+            <Bar dataKey="Profit" fill="#C4622D" radius={[6,6,0,0]}/>
+          </BarChart>
+        </ResponsiveContainer>
+        <div style={{display:"flex",gap:16,marginTop:16,flexWrap:"wrap"}}>
+          {chartData.map(d=>(
+            <div key={d.name} style={{flex:1,minWidth:100,background:"var(--cream)",borderRadius:12,padding:"12px 16px"}}>
+              <div style={{fontSize:12,color:"var(--warm)",marginBottom:4}}>{d.name}</div>
+              <div style={{fontSize:13}}>🟢 {d.Ingresos}€ · 🔴 {d.Gastos}€ · <strong>{d.Profit>=0?"✅":"⚠️"} {d.Profit}€</strong></div>
+            </div>
+          ))}
+        </div>
+      </div>
       <div className="card">
         <div className="card-title">💶 {t.paymentHistory}</div>
         <div className="tbl-wrap">
