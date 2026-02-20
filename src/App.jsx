@@ -173,30 +173,23 @@ body{font-family:'DM Sans',sans-serif;background:var(--cream);color:var(--dark);
 .app{display:flex;min-height:100vh}
 .sidebar{width:220px;background:var(--dark);display:flex;flex-direction:column;padding:28px 16px;position:fixed;top:0;left:0;bottom:0;z-index:50}
 @media(max-width:600px){
-  .sidebar{width:100%!important;height:60px;top:auto;bottom:0;left:0;right:0;flex-direction:row;padding:0;overflow:hidden!important}
-  .s-logo,.s-role,.s-user-info,.notif-wrap,.logout-btn{display:none!important}
-  .s-nav{flex-direction:row;flex:1;gap:0;justify-content:space-around;align-items:center}
-  .nav-item{flex-direction:column;padding:6px 4px;font-size:10px;gap:2px;border-radius:8px;justify-content:center;align-items:center;flex:1}
-  .nav-item span{font-size:20px}
-  .nav-item.active-o{background:var(--terra);color:#fff}
-  .nav-item.active-t{background:var(--sage);color:#fff}
-  .s-footer{display:none!important}
-  .content{margin-left:0!important;padding:16px 12px 80px!important}
-  .modal{padding:20px 16px;max-height:95vh;border-radius:20px 20px 0 0;margin-bottom:0;align-self:flex-end}
-  .overlay{align-items:flex-end;padding:0}
+  .sidebar{top:0;bottom:0;left:0;flex-direction:column;padding:20px 10px;z-index:55}
+  .sidebar.collapsed{width:0!important;min-width:0!important;padding:0!important}
   .gr2{grid-template-columns:1fr!important}
   .g2{grid-template-columns:1fr!important}
   .stats{grid-template-columns:1fr 1fr!important}
-  .chat-wrap{height:calc(100vh - 180px)}
+  .chat-wrap{height:calc(100vh - 160px)}
   table{font-size:12px}
-  th,td{padding:8px 8px}
-  .tbl-wrap{font-size:12px}
-  .page-hd h2{font-size:24px}
+  th,td{padding:8px 6px}
+  .page-hd h2{font-size:22px}
   .btn{padding:8px 14px;font-size:13px}
-  .toast{bottom:70px;right:12px;left:12px;text-align:center}
-  .notif-panel{bottom:auto;top:auto;right:0;left:0;width:100%;border-radius:16px}
+  .toast{bottom:20px;right:12px;left:12px;text-align:center}
+  .modal{padding:20px 16px;max-height:92vh;border-radius:20px 20px 0 0;align-self:flex-end}
+  .overlay{align-items:flex-end;padding:0}
   .pay-box{padding:20px}
   .pay-box .amount{font-size:32px}
+  .nav-item{padding:10px 10px;font-size:13px}
+  .nav-item span{font-size:18px}
 }
 .s-logo{font-family:'DM Serif Display',serif;font-size:22px;color:var(--cream);padding:0 10px}
 .s-logo em{color:var(--terra-l);font-style:italic}
@@ -325,6 +318,11 @@ hr{border:none;border-top:1px solid var(--border);margin:18px 0}
 .cal-day.has-event{border:2px solid var(--gold);cursor:pointer}
 .cal-day.has-expiry{border:2px solid var(--red);cursor:pointer}
 .cal-event-dot{width:6px;height:6px;border-radius:50%;background:var(--gold);margin-top:2px}
+.hamburger-btn{display:none}
+@media(max-width:600px){
+  .hamburger-btn{display:flex;position:fixed;top:10px;left:10px;z-index:60;background:var(--dark);border:none;color:var(--cream);font-size:18px;width:36px;height:36px;border-radius:10px;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+  .hamburger-btn.open{display:none}
+}
 .cal-nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .cal-nav button{background:none;border:none;font-size:20px;cursor:pointer;color:var(--warm);padding:4px 8px}
 .cal-nav button:hover{color:var(--dark)}
@@ -470,7 +468,7 @@ export default function App() {
   return(
     <><style>{css}</style>
       <div className="app">
-        <aside className="sidebar" style={{width:sidebarOpen?"220px":"64px",transition:"width .25s",overflow:"hidden"}}> 
+        <aside className={`sidebar${sidebarOpen?"":" collapsed"}`} style={{width:sidebarOpen?"220px":"64px",transition:"width .25s",overflow:"hidden",minWidth:sidebarOpen?"220px":"64px"}}> 
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 6px 0 10px",marginBottom:4}}>
             {sidebarOpen&&<div className="s-logo">Mi<em>Alquiler</em></div>}
             <button onClick={()=>setSidebarOpen(v=>!v)} style={{background:"none",border:"none",color:"var(--warm)",cursor:"pointer",fontSize:18,padding:"4px 6px",marginLeft:"auto"}}>{sidebarOpen?"◀":"▶"}</button>
@@ -513,34 +511,8 @@ export default function App() {
             <button className="logout-btn" onClick={()=>signOut(auth)} title={t.logout}>↩</button>
           </div>
         </aside>
-        <div className="mobile-topbar">
-          <div className="m-logo">Mi<em>Alquiler</em></div>
-          <div className="mobile-topbar-right">
-            {isOwner&&(
-              <div className="notif-wrap">
-                <button className="notif-btn" onClick={e=>{e.stopPropagation();setShowNotif(v=>!v);}}>
-                  🔔{anniversaries.length>0&&<span className="notif-dot"/>}
-                </button>
-                {showNotif&&(
-                  <div className="notif-panel" onClick={e=>e.stopPropagation()}>
-                    <div className="notif-panel-title">{t.notifications}</div>
-                    {anniversaries.length===0
-                      ?<div style={{fontSize:13,color:"var(--warm)"}}>{t.noNotifications}</div>
-                      :anniversaries.map((a,i)=>(
-                        <div key={i} className="notif-item">
-                          {a.type==="ipc"&&`📈 ${a.tenant.name} · Subida IPC (${a.years} año/s)`}
-                          {a.type==="signed_today"&&`📝 ${a.tenant.name} · Firmado hoy`}
-                          {a.type==="expiring"&&`⚠️ ${a.tenant.name} · Expira en ${a.daysLeft} días`}
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            )}
-            <button style={{background:"none",border:"none",color:"var(--warm)",cursor:"pointer",fontSize:16}} onClick={()=>signOut(auth)}>↩</button>
-          </div>
-        </div>
-        <main className="content fade" key={page} style={{marginLeft:sidebarOpen?"220px":"64px",transition:"margin-left .25s"}} onClick={()=>setShowNotif(false)}>
+        <main className="content fade" key={page} style={{marginLeft:sidebarOpen?"220px":"64px",transition:"margin-left .25s",minWidth:0,width:"100%"}} onClick={()=>setShowNotif(false)}>
+          {!sidebarOpen&&<button className="hamburger-btn" onClick={e=>{e.stopPropagation();setSidebarOpen(true);}}>☰</button>}
           {saving&&<div className="saving">{t.saving}</div>}
           {isOwner&&anniversaries.length>0&&page==="dashboard"&&anniversaries.map((a,i)=>(
             <div key={i} className="alert-banner">
