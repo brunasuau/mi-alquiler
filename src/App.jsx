@@ -1,475 +1,587 @@
-import { useState, useEffect, useCallback, createContext, useContext } from "react";
+import { useState, useEffect, useRef } from "react";
+import { auth, db } from "./firebase";
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from "firebase/auth";
+import {
+  doc, setDoc, getDoc, collection, query, where,
+  onSnapshot, addDoc, orderBy, serverTimestamp, updateDoc
+} from "firebase/firestore";
 
-// ─── TRANSLATIONS ────────────────────────────────────────────────────────────
-const LANGS = {
+// ── OWNER EMAIL (only this user is owner) ──────────────────────────────────
+const OWNER_EMAIL = "bertasuau@gmail.com"; // <-- cambia esto por tu email real
+
+// ── TRANSLATIONS ────────────────────────────────────────────────────────────
+const T = {
   es: {
-    dir: "ltr", flag: "🇪🇸", name: "Español",
-    appName: ["Mi", "Alquiler"],
-    loginSub: "Gestión de propiedades · Acceso rápido",
-    loginOwnerTitle: "Propietario",
-    loginOwnerDesc: "Gestiona inquilinos, finanzas y mantenimiento",
-    loginOwnerBtn: "Entrar como propietario",
-    loginTenantTitle: "Inquilino",
-    loginTenantDesc: "Consulta tu estado de pago y envía incidencias",
-    loginTenantBtn: "Entrar como inquilino",
-    saving: "Guardando cambios…",
-    nav: { dashboard: "Resumen", tenants: "Inquilinos", finances: "Finanzas", maintenance: "Mantenimiento", tHome: "Mi Piso", tCosts: "Mis Costes", tMaint: "Incidencias" },
-    roles: { owner: "Propietario", tenant: "Inquilino" },
-    dashboard: { title: "Buenos días", subtitle: "Resumen de tu propiedad", payments: "Pagos", recent: "Incidencias recientes", noMaint: "No hay incidencias 🎉" },
-    stats: { monthly: "Ingreso mensual", totalRent: "Alquiler total", received: "Pagos recibidos", tenants: "Inquilinos", active: "Activos", maintenance: "Mantenimiento", pending: "Pendientes" },
-    tenants: { title: "Inquilinos", active: "inquilinos activos", since: "Desde", paidMarch: "✓ Marzo pagado", pendingMarch: "✗ Marzo pendiente" },
-    profile: { phone: "Teléfono", email: "Email", rent: "Alquiler mensual", since: "Inquilino desde", history: "Historial de pagos", addCost: "Añadir coste", concept: "Concepto", amount: "Importe (€)", month: "Mes", save: "➕ Añadir coste", revert: "Revertir", markPaid: "Marcar pagado" },
-    finances: { title: "Finanzas", sub: "Registro de pagos y costes", rentTable: "💶 Alquileres por mes", costTable: "⚡ Costes por inquilino", addCost: "➕ Añadir coste", tenant: "Inquilino", unit: "Piso", rentCol: "Alquiler", total: "Total" },
-    maint: { title: "Mantenimiento", pending: "pendientes", total: "en total", noIssues: "🎉 Sin incidencias activas", statusLabel: "Estado" },
-    statuses: { Pendiente: "Pendiente", "En revisión": "En revisión", Resuelto: "Resuelto" },
-    statusOptions: ["Pendiente", "En revisión", "Resuelto"],
-    tHome: { hello: "Hola", paid: "Alquiler pagado", unpaid: "Alquiler pendiente", registeredOn: "Registrado el", dueThis: "Vence este mes", history: "📋 Historial de pagos", info: "ℹ️ Mi información", unitLabel: "Piso", rentLabel: "Alquiler", sinceLabel: "Desde", ownerLabel: "Propietario" },
-    tCosts: { title: "Mis Costes", sub: "Suministros registrados por el propietario", totalCosts: "Total costes", fixedRent: "Alquiler fijo", breakdown: "⚡ Desglose de costes", noCosts: "Sin costes registrados", totalLabel: "Total" },
-    tMaint: { title: "Incidencias", sub: "Comunica cualquier problema al propietario", newIssue: "➕ Nueva incidencia", typeLabel: "Tipo de problema", descLabel: "Descripción", descPlaceholder: "Describe el problema con detalle…", send: "📤 Enviar al propietario", history: "🕐 Mis incidencias", noSent: "No has enviado ninguna incidencia" },
-    costTypes: ["💡 Electricidad", "💧 Agua", "🌡️ Calefacción", "🗑️ Basuras", "Otro"],
-    maintTypes: ["Fontanería", "Electricidad", "Calefacción / A/C", "Ventanas / Puertas", "Humedades", "Electrodomésticos", "Otros"],
-    addCostModal: { title: "Añadir coste", tenantLabel: "Inquilino", save: "Guardar" },
-    toast: { payRegistered: "✅ Pago registrado", payReverted: "❌ Pago revertido", costSaved: "✅ Coste guardado", statusUpdated: "✅ Estado actualizado", issueSent: "✅ Incidencia enviada al propietario" },
-    paid: "✓ Pagado", unpaid: "✗ Pendiente", paidShort: "✓ Pag.", pendingShort: "✗ Pend.", logout: "Salir",
-    langLabel: "Idioma",
+    appName: "MiAlquiler",
+    selectLang: "Elige tu idioma",
+    loginTitle: "Bienvenido",
+    email: "Correo electrónico",
+    password: "Contraseña",
+    login: "Entrar",
+    logout: "Salir",
+    owner: "Propietario",
+    tenant: "Inquilino",
+    dashboard: "Resumen",
+    tenants: "Inquilinos",
+    finances: "Finanzas",
+    maintenance: "Mantenimiento",
+    myHome: "Mi Piso",
+    myCosts: "Mis Costes",
+    incidents: "Incidencias",
+    messages: "Mensajes",
+    paid: "Pagado",
+    pending: "Pendiente",
+    markPaid: "Marcar pagado",
+    revert: "Revertir",
+    addCost: "Añadir coste",
+    save: "Guardar",
+    send: "Enviar",
+    newTenant: "Nuevo inquilino",
+    name: "Nombre completo",
+    unit: "Piso / Habitación",
+    phone: "Teléfono",
+    rent: "Alquiler mensual (€)",
+    createAccess: "Crear acceso",
+    concept: "Concepto",
+    amount: "Importe (€)",
+    month: "Mes",
+    typeMsg: "Escribe un mensaje...",
+    sendIncident: "Enviar al propietario",
+    incidentType: "Tipo de problema",
+    description: "Descripción",
+    noTenants: "No hay inquilinos todavía",
+    noMessages: "No hay mensajes aún",
+    noIncidents: "No hay incidencias",
+    noCosts: "Sin costes registrados",
+    rentStatus: "Estado del alquiler",
+    costBreakdown: "Desglose de costes",
+    paymentHistory: "Historial de pagos",
+    registered: "Registrado el",
+    dueThisMonth: "Vence este mes",
+    inReview: "En revisión",
+    resolved: "Resuelto",
+    status: "Estado",
+    update: "Actualizar",
+    wrongCredentials: "Email o contraseña incorrectos",
+    saving: "Guardando...",
+    profile: "Perfil",
+    joinedSince: "Inquilino desde",
+    totalCosts: "Total costes",
+    monthlyRent: "Alquiler fijo",
+    incomeMonth: "Ingreso mensual",
+    paidCount: "Pagos recibidos",
+    activeTenants: "Inquilinos activos",
+    pendingMaint: "Mantenimiento pendiente",
+    recentIncidents: "Incidencias recientes",
+    paymentsMarch: "Pagos · Marzo 2025",
+    hello: "Hola",
   },
   en: {
-    dir: "ltr", flag: "🇬🇧", name: "English",
-    appName: ["My", "Rental"],
-    loginSub: "Property management · Quick access",
-    loginOwnerTitle: "Owner",
-    loginOwnerDesc: "Manage tenants, finances and maintenance",
-    loginOwnerBtn: "Enter as owner",
-    loginTenantTitle: "Tenant",
-    loginTenantDesc: "Check your payment status and send reports",
-    loginTenantBtn: "Enter as tenant",
-    saving: "Saving changes…",
-    nav: { dashboard: "Overview", tenants: "Tenants", finances: "Finances", maintenance: "Maintenance", tHome: "My Flat", tCosts: "My Costs", tMaint: "Issues" },
-    roles: { owner: "Owner", tenant: "Tenant" },
-    dashboard: { title: "Good morning", subtitle: "Property overview", payments: "Payments", recent: "Recent issues", noMaint: "No issues 🎉" },
-    stats: { monthly: "Monthly income", totalRent: "Total rent", received: "Payments received", tenants: "Tenants", active: "Active", maintenance: "Maintenance", pending: "Pending" },
-    tenants: { title: "Tenants", active: "active tenants", since: "Since", paidMarch: "✓ March paid", pendingMarch: "✗ March pending" },
-    profile: { phone: "Phone", email: "Email", rent: "Monthly rent", since: "Tenant since", history: "Payment history", addCost: "Add cost", concept: "Concept", amount: "Amount (€)", month: "Month", save: "➕ Add cost", revert: "Revert", markPaid: "Mark as paid" },
-    finances: { title: "Finances", sub: "Payment and cost records", rentTable: "💶 Rent by month", costTable: "⚡ Costs by tenant", addCost: "➕ Add cost", tenant: "Tenant", unit: "Unit", rentCol: "Rent", total: "Total" },
-    maint: { title: "Maintenance", pending: "pending", total: "total", noIssues: "🎉 No active issues", statusLabel: "Status" },
-    statuses: { Pendiente: "Pending", "En revisión": "In review", Resuelto: "Resolved" },
-    statusOptions: ["Pendiente", "En revisión", "Resuelto"],
-    tHome: { hello: "Hello", paid: "Rent paid", unpaid: "Rent pending", registeredOn: "Registered on", dueThis: "Due this month", history: "📋 Payment history", info: "ℹ️ My information", unitLabel: "Unit", rentLabel: "Rent", sinceLabel: "Since", ownerLabel: "Owner" },
-    tCosts: { title: "My Costs", sub: "Costs added by the owner", totalCosts: "Total costs", fixedRent: "Fixed rent", breakdown: "⚡ Cost breakdown", noCosts: "No costs registered", totalLabel: "Total" },
-    tMaint: { title: "Issues", sub: "Report any problem to the owner", newIssue: "➕ New issue", typeLabel: "Problem type", descLabel: "Description", descPlaceholder: "Describe the problem in detail…", send: "📤 Send to owner", history: "🕐 My issues", noSent: "You haven't sent any issues" },
-    costTypes: ["💡 Electricity", "💧 Water", "🌡️ Heating", "🗑️ Waste", "Other"],
-    maintTypes: ["Plumbing", "Electricity", "Heating / A/C", "Windows / Doors", "Dampness", "Appliances", "Other"],
-    addCostModal: { title: "Add cost", tenantLabel: "Tenant", save: "Save" },
-    toast: { payRegistered: "✅ Payment registered", payReverted: "❌ Payment reverted", costSaved: "✅ Cost saved", statusUpdated: "✅ Status updated", issueSent: "✅ Issue sent to owner" },
-    paid: "✓ Paid", unpaid: "✗ Pending", paidShort: "✓ Paid", pendingShort: "✗ Pend.", logout: "Log out",
-    langLabel: "Language",
+    appName: "MyRental",
+    selectLang: "Choose your language",
+    loginTitle: "Welcome",
+    email: "Email address",
+    password: "Password",
+    login: "Sign in",
+    logout: "Sign out",
+    owner: "Owner",
+    tenant: "Tenant",
+    dashboard: "Overview",
+    tenants: "Tenants",
+    finances: "Finances",
+    maintenance: "Maintenance",
+    myHome: "My Flat",
+    myCosts: "My Costs",
+    incidents: "Issues",
+    messages: "Messages",
+    paid: "Paid",
+    pending: "Pending",
+    markPaid: "Mark as paid",
+    revert: "Revert",
+    addCost: "Add cost",
+    save: "Save",
+    send: "Send",
+    newTenant: "New tenant",
+    name: "Full name",
+    unit: "Flat / Room",
+    phone: "Phone",
+    rent: "Monthly rent (€)",
+    createAccess: "Create access",
+    concept: "Concept",
+    amount: "Amount (€)",
+    month: "Month",
+    typeMsg: "Type a message...",
+    sendIncident: "Send to owner",
+    incidentType: "Problem type",
+    description: "Description",
+    noTenants: "No tenants yet",
+    noMessages: "No messages yet",
+    noIncidents: "No issues reported",
+    noCosts: "No costs registered",
+    rentStatus: "Rent status",
+    costBreakdown: "Cost breakdown",
+    paymentHistory: "Payment history",
+    registered: "Registered on",
+    dueThisMonth: "Due this month",
+    inReview: "In review",
+    resolved: "Resolved",
+    status: "Status",
+    update: "Update",
+    wrongCredentials: "Wrong email or password",
+    saving: "Saving...",
+    profile: "Profile",
+    joinedSince: "Tenant since",
+    totalCosts: "Total costs",
+    monthlyRent: "Fixed rent",
+    incomeMonth: "Monthly income",
+    paidCount: "Payments received",
+    activeTenants: "Active tenants",
+    pendingMaint: "Pending maintenance",
+    recentIncidents: "Recent issues",
+    paymentsMarch: "Payments · March 2025",
+    hello: "Hello",
   },
   ar: {
-    dir: "rtl", flag: "🇸🇦", name: "العربية",
-    appName: ["إيجاري", ""],
-    loginSub: "إدارة العقارات · دخول سريع",
-    loginOwnerTitle: "المالك",
-    loginOwnerDesc: "إدارة المستأجرين والتمويل والصيانة",
-    loginOwnerBtn: "الدخول كمالك",
-    loginTenantTitle: "المستأجر",
-    loginTenantDesc: "تحقق من حالة دفعك وأرسل البلاغات",
-    loginTenantBtn: "الدخول كمستأجر",
-    saving: "جارٍ الحفظ…",
-    nav: { dashboard: "نظرة عامة", tenants: "المستأجرون", finances: "المالية", maintenance: "الصيانة", tHome: "شقتي", tCosts: "تكاليفي", tMaint: "البلاغات" },
-    roles: { owner: "المالك", tenant: "المستأجر" },
-    dashboard: { title: "صباح الخير", subtitle: "ملخص العقار", payments: "المدفوعات", recent: "آخر البلاغات", noMaint: "لا توجد بلاغات 🎉" },
-    stats: { monthly: "الدخل الشهري", totalRent: "إجمالي الإيجار", received: "مدفوعات مستلمة", tenants: "المستأجرون", active: "نشطون", maintenance: "الصيانة", pending: "معلّقة" },
-    tenants: { title: "المستأجرون", active: "مستأجر نشط", since: "منذ", paidMarch: "✓ مارس مدفوع", pendingMarch: "✗ مارس معلّق" },
-    profile: { phone: "الهاتف", email: "البريد الإلكتروني", rent: "الإيجار الشهري", since: "مستأجر منذ", history: "سجل المدفوعات", addCost: "إضافة تكلفة", concept: "النوع", amount: "المبلغ (€)", month: "الشهر", save: "➕ إضافة تكلفة", revert: "التراجع", markPaid: "تعيين مدفوع" },
-    finances: { title: "المالية", sub: "سجل المدفوعات والتكاليف", rentTable: "💶 الإيجار حسب الشهر", costTable: "⚡ التكاليف حسب المستأجر", addCost: "➕ إضافة تكلفة", tenant: "المستأجر", unit: "الوحدة", rentCol: "الإيجار", total: "المجموع" },
-    maint: { title: "الصيانة", pending: "معلّقة", total: "إجمالي", noIssues: "🎉 لا توجد بلاغات نشطة", statusLabel: "الحالة" },
-    statuses: { Pendiente: "معلّق", "En revisión": "قيد المراجعة", Resuelto: "تم الحل" },
-    statusOptions: ["Pendiente", "En revisión", "Resuelto"],
-    tHome: { hello: "مرحباً", paid: "الإيجار مدفوع", unpaid: "الإيجار معلّق", registeredOn: "مسجّل في", dueThis: "مستحق هذا الشهر", history: "📋 سجل المدفوعات", info: "ℹ️ معلوماتي", unitLabel: "الوحدة", rentLabel: "الإيجار", sinceLabel: "منذ", ownerLabel: "المالك" },
-    tCosts: { title: "تكاليفي", sub: "التكاليف المضافة من قِبل المالك", totalCosts: "إجمالي التكاليف", fixedRent: "إيجار ثابت", breakdown: "⚡ تفصيل التكاليف", noCosts: "لا توجد تكاليف مسجّلة", totalLabel: "المجموع" },
-    tMaint: { title: "البلاغات", sub: "أبلغ المالك عن أي مشكلة", newIssue: "➕ بلاغ جديد", typeLabel: "نوع المشكلة", descLabel: "الوصف", descPlaceholder: "صف المشكلة بالتفصيل…", send: "📤 إرسال للمالك", history: "🕐 بلاغاتي", noSent: "لم ترسل أي بلاغات" },
-    costTypes: ["💡 كهرباء", "💧 ماء", "🌡️ تدفئة", "🗑️ نفايات", "أخرى"],
-    maintTypes: ["سباكة", "كهرباء", "تدفئة / تكييف", "نوافذ / أبواب", "رطوبة", "أجهزة", "أخرى"],
-    addCostModal: { title: "إضافة تكلفة", tenantLabel: "المستأجر", save: "حفظ" },
-    toast: { payRegistered: "✅ تم تسجيل الدفع", payReverted: "❌ تم التراجع عن الدفع", costSaved: "✅ تم حفظ التكلفة", statusUpdated: "✅ تم تحديث الحالة", issueSent: "✅ تم إرسال البلاغ للمالك" },
-    paid: "✓ مدفوع", unpaid: "✗ معلّق", paidShort: "✓ مدفوع", pendingShort: "✗ معلّق", logout: "خروج",
-    langLabel: "اللغة",
+    appName: "إيجاري",
+    selectLang: "اختر لغتك",
+    loginTitle: "مرحباً",
+    email: "البريد الإلكتروني",
+    password: "كلمة المرور",
+    login: "دخول",
+    logout: "خروج",
+    owner: "المالك",
+    tenant: "المستأجر",
+    dashboard: "ملخص",
+    tenants: "المستأجرون",
+    finances: "الماليات",
+    maintenance: "الصيانة",
+    myHome: "شقتي",
+    myCosts: "تكاليفي",
+    incidents: "البلاغات",
+    messages: "الرسائل",
+    paid: "مدفوع",
+    pending: "معلق",
+    markPaid: "تأكيد الدفع",
+    revert: "تراجع",
+    addCost: "إضافة تكلفة",
+    save: "حفظ",
+    send: "إرسال",
+    newTenant: "مستأجر جديد",
+    name: "الاسم الكامل",
+    unit: "الشقة / الغرفة",
+    phone: "الهاتف",
+    rent: "الإيجار الشهري (€)",
+    createAccess: "إنشاء حساب",
+    concept: "البند",
+    amount: "المبلغ (€)",
+    month: "الشهر",
+    typeMsg: "اكتب رسالة...",
+    sendIncident: "إرسال للمالك",
+    incidentType: "نوع المشكلة",
+    description: "الوصف",
+    noTenants: "لا يوجد مستأجرون",
+    noMessages: "لا توجد رسائل",
+    noIncidents: "لا توجد بلاغات",
+    noCosts: "لا توجد تكاليف",
+    rentStatus: "حالة الإيجار",
+    costBreakdown: "تفاصيل التكاليف",
+    paymentHistory: "سجل المدفوعات",
+    registered: "تم التسجيل في",
+    dueThisMonth: "مستحق هذا الشهر",
+    inReview: "قيد المراجعة",
+    resolved: "تم الحل",
+    status: "الحالة",
+    update: "تحديث",
+    wrongCredentials: "بريد إلكتروني أو كلمة مرور خاطئة",
+    saving: "جاري الحفظ...",
+    profile: "الملف الشخصي",
+    joinedSince: "مستأجر منذ",
+    totalCosts: "إجمالي التكاليف",
+    monthlyRent: "الإيجار الثابت",
+    incomeMonth: "الدخل الشهري",
+    paidCount: "المدفوعات المستلمة",
+    activeTenants: "المستأجرون النشطون",
+    pendingMaint: "صيانة معلقة",
+    recentIncidents: "البلاغات الأخيرة",
+    paymentsMarch: "المدفوعات · مارس 2025",
+    hello: "مرحباً",
   }
 };
 
-// ─── CONTEXT ─────────────────────────────────────────────────────────────────
-const LangCtx = createContext({ lang: "es", t: LANGS.es });
-const useLang = () => useContext(LangCtx);
+// ── HELPERS ─────────────────────────────────────────────────────────────────
+const avatarColors = ["#C4622D","#7A9E7E","#D4A853","#6B8CBA","#9B6BB5","#C4844A"];
+const getColor = (str) => avatarColors[str?.charCodeAt(0) % avatarColors.length] || "#C4622D";
+const initials = (name) => name?.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2) || "?";
+const today = () => new Date().toLocaleDateString("es-ES");
 
-// ─── INITIAL DATA ────────────────────────────────────────────────────────────
-const INITIAL_DATA = {
-  owner: { name: "Carlos Moreno", phone: "+34 611 222 333", email: "carlos@email.com" },
-  tenants: [
-    { id: 1, name: "Ana García", unit: "Piso 1A", avatar: "AG", phone: "+34 622 111 444", email: "ana@email.com", joined: "Enero 2024", rent: 750,
-      payments: { "Enero 2025": { paid: true, date: "03/01/2025" }, "Febrero 2025": { paid: true, date: "02/02/2025" }, "Marzo 2025": { paid: false, date: null } },
-      costs: [{ id: 1, icon: "💡", name: "Electricidad", month: "Febrero 2025", amount: 68 }, { id: 2, icon: "💧", name: "Agua", month: "Febrero 2025", amount: 22 }],
-      maintenance: [{ id: 1, type: "Fontanería", date: "12/03/2025", status: "Pendiente", desc: "La llave del baño gotea constantemente." }]
-    },
-    { id: 2, name: "Luis Pérez", unit: "Piso 2B", avatar: "LP", phone: "+34 633 555 777", email: "luis@email.com", joined: "Marzo 2023", rent: 850,
-      payments: { "Enero 2025": { paid: true, date: "05/01/2025" }, "Febrero 2025": { paid: true, date: "04/02/2025" }, "Marzo 2025": { paid: true, date: "01/03/2025" } },
-      costs: [{ id: 3, icon: "💡", name: "Electricidad", month: "Febrero 2025", amount: 55 }, { id: 4, icon: "💧", name: "Agua", month: "Febrero 2025", amount: 18 }],
-      maintenance: []
-    },
-    { id: 3, name: "Sara Jiménez", unit: "Piso 3C", avatar: "SJ", phone: "+34 644 888 000", email: "sara@email.com", joined: "Junio 2024", rent: 680,
-      payments: { "Enero 2025": { paid: true, date: "02/01/2025" }, "Febrero 2025": { paid: false, date: null }, "Marzo 2025": { paid: false, date: null } },
-      costs: [{ id: 5, icon: "💡", name: "Electricidad", month: "Febrero 2025", amount: 72 }, { id: 6, icon: "💧", name: "Agua", month: "Febrero 2025", amount: 25 }],
-      maintenance: [{ id: 2, type: "Electricidad", date: "08/03/2025", status: "En revisión", desc: "El enchufe del salón no funciona." }]
-    }
-  ]
+const maintIcons = {
+  "Fontanería":"🚿","Plumbing":"🚿","السباكة":"🚿",
+  "Electricidad":"⚡","Electricity":"⚡","الكهرباء":"⚡",
+  "Calefacción":"🌡️","Heating":"🌡️","التدفئة":"🌡️",
+  "Ventanas":"🪟","Windows":"🪟","النوافذ":"🪟",
+  "Electrodomésticos":"🔌","Appliances":"🔌","الأجهزة":"🔌",
+  "Otros":"🔧","Others":"🔧","أخرى":"🔧",
 };
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
-const avatarColors = ["#C4622D", "#7A9E7E", "#D4A853", "#6B8CBA", "#9B6BB5"];
-const getColor = (id) => avatarColors[(id - 1) % avatarColors.length];
-const maintIcon = (type) => ({ "Fontanería": "🚿", "Plumbing": "🚿", "سباكة": "🚿", "Electricidad": "⚡", "Electricity": "⚡", "كهرباء": "⚡", "Calefacción / A/C": "🌡️", "Heating / A/C": "🌡️", "تدفئة / تكييف": "🌡️", "Ventanas / Puertas": "🪟", "Windows / Doors": "🪟", "نوافذ / أبواب": "🪟", "Humedades": "💧", "Dampness": "💧", "رطوبة": "💧", "Electrodomésticos": "🔌", "Appliances": "🔌", "أجهزة": "🔌" }[type] || "🔧");
-const statusColor = (s) => ({ "Pendiente": { bg: "#FDECEA", color: "#D94F3D" }, "En revisión": { bg: "#FDF6E3", color: "#D4A853" }, "Resuelto": { bg: "#E6F4ED", color: "#4A9B6F" } }[s] || { bg: "#F0ECE8", color: "#8C7B6E" });
-const today = () => new Date().toLocaleDateString("es-ES");
-const STORAGE_KEY = "rental-app-data-v3";
-const LANG_KEY = "rental-app-lang";
-
-async function loadData() {
-  try { const r = await window.storage.get(STORAGE_KEY); if (r?.value) return JSON.parse(r.value); } catch (e) {}
-  return null;
-}
-async function saveData(data) { try { await window.storage.set(STORAGE_KEY, JSON.stringify(data)); } catch (e) {} }
-async function loadLang() {
-  try { const r = await window.storage.get(LANG_KEY); if (r?.value) return r.value; } catch (e) {}
-  return "es";
-}
-async function saveLang(lang) { try { await window.storage.set(LANG_KEY, lang); } catch (e) {} }
-
-// ─── STYLES ──────────────────────────────────────────────────────────────────
+// ── CSS ──────────────────────────────────────────────────────────────────────
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=Noto+Sans+Arabic:wght@400;500;600&display=swap');
-  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-  :root{--cream:#F7F3EE;--dark:#1A1612;--terra:#C4622D;--terra-l:#E8845A;--sage:#7A9E7E;--sage-l:#A8C5AB;--gold:#D4A853;--warm:#8C7B6E;--bg:#FFFCF9;--border:#E8DDD4;--red:#D94F3D;--green:#4A9B6F}
-  body{font-family:'DM Sans',sans-serif;background:var(--cream);color:var(--dark)}
-  [dir="rtl"]{font-family:'Noto Sans Arabic','DM Sans',sans-serif}
-  .serif{font-family:'DM Serif Display',serif}
-  /* LOGIN */
-  .login-wrap{min-height:100vh;background:var(--dark);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px}
-  .login-title{font-family:'DM Serif Display',serif;font-size:54px;color:var(--cream);letter-spacing:-1px;text-align:center;line-height:1}
-  .login-title em{color:var(--terra-l);font-style:italic}
-  .login-sub{color:var(--warm);font-size:13px;text-transform:uppercase;letter-spacing:1px;text-align:center;margin-top:10px;margin-bottom:40px}
-  .login-cards{display:flex;gap:20px;flex-wrap:wrap;justify-content:center}
-  .login-card{background:#2A2420;border:1px solid #3A3028;border-radius:20px;padding:36px 28px;width:230px;text-align:center;transition:all .25s}
-  .login-card:hover{border-color:var(--terra);transform:translateY(-4px)}
-  .login-card .ico{font-size:42px;margin-bottom:14px}
-  .login-card h3{font-family:'DM Serif Display',serif;font-size:22px;color:var(--cream);margin-bottom:8px}
-  .login-card p{color:var(--warm);font-size:13px;line-height:1.5;margin-bottom:20px}
-  .lbtn{width:100%;padding:11px;border-radius:10px;border:none;cursor:pointer;font-family:'DM Sans','Noto Sans Arabic',sans-serif;font-size:13px;font-weight:600;transition:all .2s}
-  .lbtn-o{background:var(--terra);color:#fff}.lbtn-o:hover{background:var(--terra-l)}
-  .lbtn-t{background:var(--sage);color:#fff}.lbtn-t:hover{background:var(--sage-l)}
-  /* LANG PICKER */
-  .lang-bar{display:flex;gap:6px;margin-bottom:28px;justify-content:center}
-  .lang-btn{background:#2A2420;border:1.5px solid #3A3028;border-radius:20px;padding:6px 14px;color:var(--warm);font-size:13px;cursor:pointer;transition:all .2s;font-family:'DM Sans','Noto Sans Arabic',sans-serif}
-  .lang-btn:hover{border-color:var(--terra-l);color:var(--cream)}
-  .lang-btn.active{background:var(--terra);border-color:var(--terra);color:#fff}
-  .lang-btn-inline{background:#2A2420;border:1.5px solid #3A3028;border-radius:20px;padding:4px 10px;color:var(--warm);font-size:12px;cursor:pointer;transition:all .2s;font-family:'DM Sans','Noto Sans Arabic',sans-serif}
-  .lang-btn-inline:hover{border-color:var(--terra-l);color:var(--cream)}
-  .lang-btn-inline.active{background:var(--terra);border-color:var(--terra);color:#fff}
-  /* LAYOUT */
-  .app{display:flex;min-height:100vh}
-  .sidebar{width:220px;background:var(--dark);display:flex;flex-direction:column;padding:28px 16px;position:fixed;top:0;bottom:0;z-index:50}
-  [dir="ltr"] .sidebar{left:0}
-  [dir="rtl"] .sidebar{right:0}
-  .s-logo{font-family:'DM Serif Display',serif;font-size:22px;color:var(--cream);padding:0 10px}
-  .s-logo em{color:var(--terra-l);font-style:italic}
-  .s-role{font-size:11px;color:var(--warm);text-transform:uppercase;letter-spacing:1px;padding:0 10px;margin:4px 0 20px}
-  .s-nav{flex:1;display:flex;flex-direction:column;gap:3px}
-  .nav-item{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:10px;cursor:pointer;color:var(--warm);font-size:14px;font-weight:500;transition:all .2s;border:none;background:none;width:100%;font-family:'DM Sans','Noto Sans Arabic',sans-serif}
-  [dir="ltr"] .nav-item{text-align:left}
-  [dir="rtl"] .nav-item{text-align:right;flex-direction:row-reverse}
-  .nav-item:hover{background:#2A2420;color:var(--cream)}
-  .nav-item.active-o{background:var(--terra);color:#fff}
-  .nav-item.active-t{background:var(--sage);color:#fff}
-  .s-lang{padding:0 4px;margin-bottom:10px;display:flex;gap:4px;flex-wrap:wrap}
-  .s-footer{border-top:1px solid #2A2420;padding-top:14px;margin-top:auto;display:flex;align-items:center;gap:10px}
-  [dir="rtl"] .s-footer{flex-direction:row-reverse}
-  .s-user-info{flex:1;min-width:0}
-  .s-user-info strong{font-size:13px;color:var(--cream);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .s-user-info span{font-size:11px;color:var(--warm)}
-  .logout{background:none;border:none;color:var(--warm);cursor:pointer;font-size:16px;padding:4px;transition:color .2s}
-  .logout:hover{color:var(--cream)}
-  /* CONTENT */
-  .content{padding:40px;flex:1;min-height:100vh}
-  [dir="ltr"] .content{margin-left:220px}
-  [dir="rtl"] .content{margin-right:220px}
-  /* AVATAR */
-  .av{border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;color:#fff;flex-shrink:0}
-  .av-sm{width:34px;height:34px;font-size:13px}
-  .av-md{width:48px;height:48px;font-size:18px}
-  .av-lg{width:72px;height:72px;font-size:28px;font-family:'DM Serif Display',serif}
-  /* PAGE */
-  .page-hd{margin-bottom:32px;display:flex;justify-content:space-between;align-items:flex-start}
-  .page-hd h2{font-family:'DM Serif Display',serif;font-size:32px;letter-spacing:-0.5px}
-  .page-hd p{color:var(--warm);font-size:14px;margin-top:4px}
-  /* STATS */
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin-bottom:28px}
-  .stat{background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:22px 20px}
-  .stat .lbl{font-size:11px;color:var(--warm);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
-  .stat .val{font-family:'DM Serif Display',serif;font-size:30px;line-height:1}
-  .stat .sub{font-size:12px;color:var(--warm);margin-top:6px}
-  .stat.tl{border-left:4px solid var(--terra)}.stat.sl{border-left:4px solid var(--sage)}.stat.gl{border-left:4px solid var(--gold)}.stat.rl{border-left:4px solid var(--red)}
-  [dir="rtl"] .stat.tl{border-left:none;border-right:4px solid var(--terra)}
-  [dir="rtl"] .stat.sl{border-left:none;border-right:4px solid var(--sage)}
-  [dir="rtl"] .stat.gl{border-left:none;border-right:4px solid var(--gold)}
-  [dir="rtl"] .stat.rl{border-left:none;border-right:4px solid var(--red)}
-  /* CARD */
-  .card{background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:20px}
-  .card-title{font-family:'DM Serif Display',serif;font-size:18px;margin-bottom:18px;display:flex;align-items:center;gap:8px}
-  /* GRID */
-  .g2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-  @media(max-width:900px){.g2{grid-template-columns:1fr}.content{padding:24px 16px}}
-  /* TENANT ROW */
-  .t-row{display:flex;align-items:center;gap:14px;padding:16px;border-radius:12px;border:1px solid var(--border);background:#fff;cursor:pointer;transition:box-shadow .2s;margin-bottom:10px}
-  [dir="rtl"] .t-row{flex-direction:row-reverse}
-  .t-row:hover{box-shadow:0 4px 16px rgba(0,0,0,.07)}
-  .t-info{flex:1}
-  .t-info strong{font-size:15px;display:block}
-  .t-info span{font-size:13px;color:var(--warm)}
-  /* BADGE */
-  .badge{font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
-  /* MAINT */
-  .mi{display:flex;align-items:flex-start;gap:14px;padding:16px;border-radius:12px;border:1px solid var(--border);background:#fff;margin-bottom:10px}
-  [dir="rtl"] .mi{flex-direction:row-reverse}
-  .mi-icon{width:40px;height:40px;border-radius:10px;background:#FDF3EE;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
-  .mi-info{flex:1}
-  .mi-info strong{font-size:14px;display:block}
-  .mi-info .meta{font-size:12px;color:var(--warm);margin-top:3px}
-  .mi-info p{font-size:13px;color:#555;margin-top:6px;line-height:1.5}
-  /* TABLE */
-  .tbl-wrap{overflow-x:auto}
-  table{width:100%;border-collapse:collapse}
-  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--warm);padding:0 14px 12px;border-bottom:1px solid var(--border);font-weight:600;white-space:nowrap}
-  [dir="rtl"] th{text-align:right}
-  td{padding:13px 14px;border-bottom:1px solid var(--border);font-size:14px}
-  tr:last-child td{border-bottom:none}
-  tbody tr:hover td{background:var(--cream)}
-  /* BUTTONS */
-  .btn{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:600;border:none;cursor:pointer;transition:all .2s;font-family:'DM Sans','Noto Sans Arabic',sans-serif}
-  .btn-p{background:var(--terra);color:#fff}.btn-p:hover{background:var(--terra-l)}
-  .btn-s{background:var(--sage);color:#fff}.btn-s:hover{background:var(--sage-l)}
-  .btn-o{background:transparent;border:1.5px solid var(--border);color:var(--dark)}.btn-o:hover{border-color:var(--terra);color:var(--terra)}
-  .btn-sm{padding:5px 10px;font-size:12px}
-  /* FORM */
-  .fg{margin-bottom:16px}
-  .fg label{font-size:12px;font-weight:600;color:var(--warm);text-transform:uppercase;letter-spacing:.7px;display:block;margin-bottom:6px}
-  .fg input,.fg select,.fg textarea{width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;font-family:'DM Sans','Noto Sans Arabic',sans-serif;font-size:14px;background:#fff;color:var(--dark);transition:border-color .2s;outline:none}
-  .fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--terra)}
-  .fg textarea{resize:vertical;min-height:80px}
-  .gr2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  /* PAY STATUS */
-  .pay-status{border-radius:20px;padding:28px;text-align:center;margin-bottom:20px}
-  .pay-status h3{font-family:'DM Serif Display',serif;font-size:24px;margin-bottom:4px}
-  .pay-status .amount{font-family:'DM Serif Display',serif;font-size:40px;margin:14px 0;color:var(--dark)}
-  .pay-status p{font-size:14px;color:var(--warm)}
-  .sico{font-size:48px;margin-bottom:10px}
-  /* COST ROW */
-  .cr{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border)}
-  [dir="rtl"] .cr{flex-direction:row-reverse}
-  .cr:last-child{border-bottom:none}
-  .cr .cn{font-size:14px;display:flex;align-items:center;gap:8px}
-  [dir="rtl"] .cr .cn{flex-direction:row-reverse}
-  .cr .ca{font-weight:600;font-size:15px}
-  /* PROFILE */
-  .prof-hd{display:flex;align-items:center;gap:18px;margin-bottom:24px}
-  [dir="rtl"] .prof-hd{flex-direction:row-reverse}
-  .prof-hd-info h3{font-family:'DM Serif Display',serif;font-size:22px}
-  .prof-hd-info p{color:var(--warm);font-size:14px}
-  .prof-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .pf-lbl{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--warm);font-weight:600;margin-bottom:3px}
-  .pf-val{font-size:15px;font-weight:500}
-  hr{border:none;border-top:1px solid var(--border);margin:18px 0}
-  /* MODAL */
-  .overlay{position:fixed;inset:0;background:rgba(20,15,10,.55);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px}
-  .modal{background:var(--bg);border-radius:20px;padding:32px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto}
-  .modal-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
-  [dir="rtl"] .modal-hd{flex-direction:row-reverse}
-  .modal-hd h3{font-family:'DM Serif Display',serif;font-size:22px}
-  .close-btn{background:none;border:none;font-size:20px;cursor:pointer;color:var(--warm);padding:4px}
-  .close-btn:hover{color:var(--dark)}
-  /* TOAST */
-  .toast{position:fixed;bottom:30px;background:var(--dark);color:var(--cream);padding:14px 20px;border-radius:12px;font-size:14px;z-index:9999;animation:slideUp .3s ease;box-shadow:0 8px 24px rgba(0,0,0,.2)}
-  [dir="ltr"] .toast{right:30px}
-  [dir="rtl"] .toast{left:30px}
-  @keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
-  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-  .fade{animation:fadeIn .3s ease}
-  .saving{font-size:11px;color:var(--warm);display:flex;align-items:center;gap:6px;margin-bottom:16px}
-  .saving::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--sage);display:inline-block}
-  select.status-sel{font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:pointer;font-family:'DM Sans','Noto Sans Arabic',sans-serif}
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --cream:#F7F3EE;--dark:#1A1612;--terra:#C4622D;--terra-l:#E8845A;
+  --sage:#7A9E7E;--sage-l:#A8C5AB;--gold:#D4A853;--warm:#8C7B6E;
+  --bg:#FFFCF9;--border:#E8DDD4;--red:#D94F3D;--green:#4A9B6F;
+}
+body{font-family:'DM Sans',sans-serif;background:var(--cream);color:var(--dark);font-size:15px}
+.serif{font-family:'DM Serif Display',serif}
+
+/* LANG SELECT */
+.lang-screen{min-height:100vh;background:var(--dark);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:32px;padding:20px}
+.lang-title{font-family:'DM Serif Display',serif;font-size:52px;color:var(--cream);letter-spacing:-1px;text-align:center}
+.lang-title em{color:var(--terra-l);font-style:italic}
+.lang-cards{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.lang-card{background:#2A2420;border:2px solid #3A3028;border-radius:16px;padding:24px 32px;cursor:pointer;text-align:center;transition:all .2s;color:var(--cream)}
+.lang-card:hover,.lang-card.sel{border-color:var(--terra);background:#332A25}
+.lang-card .flag{font-size:36px;margin-bottom:8px}
+.lang-card p{font-size:15px;font-weight:500}
+
+/* LOGIN */
+.login-wrap{min-height:100vh;background:var(--dark);display:flex;align-items:center;justify-content:center;padding:20px}
+.login-box{background:#2A2420;border:1px solid #3A3028;border-radius:24px;padding:40px 36px;width:100%;max-width:380px}
+.login-box h2{font-family:'DM Serif Display',serif;font-size:28px;color:var(--cream);margin-bottom:6px}
+.login-box p{color:var(--warm);font-size:13px;margin-bottom:28px}
+.login-err{background:#3D1A18;border:1px solid var(--red);color:#F5A49A;padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:16px}
+
+/* SIDEBAR */
+.app{display:flex;min-height:100vh}
+.sidebar{width:220px;background:var(--dark);display:flex;flex-direction:column;padding:28px 16px;position:fixed;top:0;left:0;bottom:0;z-index:50}
+.s-logo{font-family:'DM Serif Display',serif;font-size:22px;color:var(--cream);padding:0 10px}
+.s-logo em{color:var(--terra-l);font-style:italic}
+.s-role{font-size:11px;color:var(--warm);text-transform:uppercase;letter-spacing:1px;padding:0 10px;margin:4px 0 24px}
+.s-nav{flex:1;display:flex;flex-direction:column;gap:3px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:10px;cursor:pointer;color:var(--warm);font-size:14px;font-weight:500;transition:all .2s;border:none;background:none;width:100%;text-align:left;font-family:'DM Sans',sans-serif}
+.nav-item:hover{background:#2A2420;color:var(--cream)}
+.nav-item.active-o{background:var(--terra);color:#fff}
+.nav-item.active-t{background:var(--sage);color:#fff}
+.s-footer{border-top:1px solid #2A2420;padding-top:14px;margin-top:auto;display:flex;align-items:center;gap:10px}
+.s-user-info{flex:1;min-width:0}
+.s-user-info strong{font-size:13px;color:var(--cream);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-user-info span{font-size:11px;color:var(--warm)}
+.logout-btn{background:none;border:none;color:var(--warm);cursor:pointer;font-size:16px;padding:4px;transition:color .2s}
+.logout-btn:hover{color:var(--cream)}
+
+/* CONTENT */
+.content{margin-left:220px;padding:40px;flex:1;min-height:100vh}
+@media(max-width:800px){.sidebar{width:180px}.content{margin-left:180px;padding:24px 16px}}
+
+/* AVATAR */
+.av{border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;color:#fff;flex-shrink:0}
+.av-sm{width:34px;height:34px;font-size:13px}
+.av-md{width:48px;height:48px;font-size:18px;font-family:'DM Serif Display',serif}
+.av-lg{width:72px;height:72px;font-size:26px;font-family:'DM Serif Display',serif}
+
+/* PAGE */
+.page-hd{margin-bottom:32px}
+.page-hd h2{font-family:'DM Serif Display',serif;font-size:32px;letter-spacing:-.5px}
+.page-hd p{color:var(--warm);font-size:14px;margin-top:4px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.fade{animation:fadeIn .3s ease}
+
+/* STATS */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:28px}
+.stat{background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:22px 20px}
+.stat .lbl{font-size:11px;color:var(--warm);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
+.stat .val{font-family:'DM Serif Display',serif;font-size:30px;line-height:1}
+.stat .sub{font-size:12px;color:var(--warm);margin-top:6px}
+.stat.tl{border-left:4px solid var(--terra)}
+.stat.sl{border-left:4px solid var(--sage)}
+.stat.gl{border-left:4px solid var(--gold)}
+.stat.rl{border-left:4px solid var(--red)}
+
+/* CARD */
+.card{background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:20px}
+.card-title{font-family:'DM Serif Display',serif;font-size:18px;margin-bottom:18px;display:flex;align-items:center;gap:8px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:900px){.g2{grid-template-columns:1fr}}
+
+/* TENANT ROW */
+.t-row{display:flex;align-items:center;gap:14px;padding:16px;border-radius:12px;border:1px solid var(--border);background:#fff;cursor:pointer;transition:box-shadow .2s;margin-bottom:10px}
+.t-row:hover{box-shadow:0 4px 16px rgba(0,0,0,.07)}
+.t-info{flex:1}
+.t-info strong{font-size:15px;display:block}
+.t-info span{font-size:13px;color:var(--warm)}
+
+/* BADGE */
+.badge{font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+
+/* MAINT */
+.mi{display:flex;align-items:flex-start;gap:14px;padding:16px;border-radius:12px;border:1px solid var(--border);background:#fff;margin-bottom:10px}
+.mi-icon{width:40px;height:40px;border-radius:10px;background:#FDF3EE;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.mi-info{flex:1}
+.mi-info strong{font-size:14px;display:block}
+.mi-info .meta{font-size:12px;color:var(--warm);margin-top:3px}
+.mi-info p{font-size:13px;color:#555;margin-top:6px;line-height:1.5}
+
+/* TABLE */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--warm);padding:0 14px 12px;border-bottom:1px solid var(--border);font-weight:600;white-space:nowrap}
+td{padding:13px 14px;border-bottom:1px solid var(--border);font-size:14px}
+tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--cream)}
+
+/* BUTTONS */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:600;border:none;cursor:pointer;transition:all .2s;font-family:'DM Sans',sans-serif}
+.btn-p{background:var(--terra);color:#fff}
+.btn-p:hover{background:var(--terra-l)}
+.btn-s{background:var(--sage);color:#fff}
+.btn-s:hover{background:var(--sage-l)}
+.btn-o{background:transparent;border:1.5px solid var(--border);color:var(--dark)}
+.btn-o:hover{border-color:var(--terra);color:var(--terra)}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn-full{width:100%;justify-content:center}
+
+/* FORM */
+.fg{margin-bottom:16px}
+.fg label{font-size:12px;font-weight:600;color:var(--warm);text-transform:uppercase;letter-spacing:.7px;display:block;margin-bottom:6px}
+.fg input,.fg select,.fg textarea{width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;background:#fff;color:var(--dark);transition:border-color .2s;outline:none}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--terra)}
+.fg textarea{resize:vertical;min-height:80px}
+.gr2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+
+/* PAY STATUS */
+.pay-box{border-radius:20px;padding:28px;text-align:center;margin-bottom:20px}
+.pay-box h3{font-family:'DM Serif Display',serif;font-size:24px;margin-bottom:4px}
+.pay-box .amount{font-family:'DM Serif Display',serif;font-size:40px;margin:14px 0;color:var(--dark)}
+.pay-box p{font-size:14px;color:var(--warm)}
+.pay-box .sico{font-size:48px;margin-bottom:10px}
+
+/* COST ROW */
+.cr{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border)}
+.cr:last-child{border-bottom:none}
+.cr .cn{font-size:14px;display:flex;align-items:center;gap:8px}
+.cr .ca{font-weight:600;font-size:15px}
+
+/* MODAL */
+.overlay{position:fixed;inset:0;background:rgba(20,15,10,.55);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal{background:var(--bg);border-radius:20px;padding:32px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto}
+.modal-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+.modal-hd h3{font-family:'DM Serif Display',serif;font-size:22px}
+.close-btn{background:none;border:none;font-size:20px;cursor:pointer;color:var(--warm);padding:4px}
+.close-btn:hover{color:var(--dark)}
+
+/* PROFILE */
+.prof-hd{display:flex;align-items:center;gap:18px;margin-bottom:24px}
+.prof-hd-info h3{font-family:'DM Serif Display',serif;font-size:22px}
+.prof-hd-info p{color:var(--warm);font-size:14px}
+.prof-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pf-lbl{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--warm);font-weight:600;margin-bottom:3px}
+.pf-val{font-size:15px;font-weight:500}
+
+/* CHAT */
+.chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:400px}
+.chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;background:#fff;border-radius:16px 16px 0 0;border:1px solid var(--border)}
+.msg{max-width:75%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.5}
+.msg.mine{align-self:flex-end;background:var(--terra);color:#fff;border-bottom-right-radius:4px}
+.msg.theirs{align-self:flex-start;background:var(--cream);color:var(--dark);border-bottom-left-radius:4px}
+.msg .msg-meta{font-size:11px;opacity:.7;margin-top:4px}
+.chat-input{display:flex;gap:8px;padding:12px;background:#fff;border:1px solid var(--border);border-top:none;border-radius:0 0 16px 16px}
+.chat-input input{flex:1;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;outline:none}
+.chat-input input:focus{border-color:var(--terra)}
+.chat-tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.chat-tab{padding:8px 16px;border-radius:20px;border:1.5px solid var(--border);font-size:13px;cursor:pointer;background:#fff;transition:all .2s;font-family:'DM Sans',sans-serif}
+.chat-tab.active{background:var(--terra);border-color:var(--terra);color:#fff}
+
+hr{border:none;border-top:1px solid var(--border);margin:18px 0}
+.saving{font-size:11px;color:var(--warm);display:flex;align-items:center;gap:6px;margin-bottom:16px}
+.saving::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--sage);display:inline-block}
+.status-sel{font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:pointer;font-family:'DM Sans',sans-serif}
+.toast{position:fixed;bottom:30px;right:30px;background:var(--dark);color:var(--cream);padding:14px 20px;border-radius:12px;font-size:14px;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.2)}
+@keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+.toast{animation:slideUp .3s ease}
 `;
 
-// ─── LANG PICKER ─────────────────────────────────────────────────────────────
-function LangPicker({ current, onChange, inline }) {
-  return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: inline ? "flex-start" : "center" }}>
-      {Object.entries(LANGS).map(([code, l]) => (
-        <button key={code} className={inline ? `lang-btn-inline ${current === code ? "active" : ""}` : `lang-btn ${current === code ? "active" : ""}`}
-          onClick={() => onChange(code)}>
-          {l.flag} {l.name}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ─── APP ─────────────────────────────────────────────────────────────────────
+// ── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [lang, setLang] = useState("es");
-  const [role, setRole] = useState(null);
+  const [lang, setLang] = useState(null);
+  const [user, setUser] = useState(undefined); // undefined = loading
+  const [profile, setProfile] = useState(null);
   const [page, setPage] = useState("dashboard");
-  const [db, setDb] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState(null);
   const [modal, setModal] = useState(null);
-  const TENANT_ID = 1;
-  const t = LANGS[lang];
+  const [toast, setToast] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [tenants, setTenants] = useState([]);
 
+  const t = T[lang || "es"];
+  const isOwner = profile?.role === "owner";
+
+  // Auth listener
   useEffect(() => {
-    Promise.all([loadData(), loadLang()]).then(([saved, savedLang]) => {
-      setDb(saved || INITIAL_DATA);
-      setLang(savedLang || "es");
-      setLoading(false);
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (u) {
+        const snap = await getDoc(doc(db, "users", u.uid));
+        if (snap.exists()) {
+          setProfile(snap.data());
+          setLang(snap.data().lang || "es");
+        }
+      } else {
+        setProfile(null);
+      }
     });
+    return unsub;
   }, []);
 
-  // Apply dir to document
+  // Load tenants (owner only)
   useEffect(() => {
-    document.documentElement.dir = t.dir;
-  }, [lang, t.dir]);
+    if (!isOwner) return;
+    const q = query(collection(db, "users"), where("role", "==", "tenant"));
+    const unsub = onSnapshot(q, (snap) => {
+      setTenants(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return unsub;
+  }, [isOwner]);
 
-  const changeLang = (code) => { setLang(code); saveLang(code); };
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2500);
+  };
 
-  const persist = useCallback(async (newDb) => {
-    setDb(newDb); setSaving(true);
-    await saveData(newDb); setSaving(false);
-  }, []);
+  const persist = async (ref, data) => {
+    setSaving(true);
+    await updateDoc(ref, data);
+    setSaving(false);
+    showToast("✅ Guardado");
+  };
 
-  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
-
-  if (loading) return (
+  // Loading
+  if (user === undefined) return (
     <>
       <style>{css}</style>
-      <div style={{ minHeight: "100vh", background: "#1A1612", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <p style={{ color: "#8C7B6E", fontFamily: "'DM Sans',sans-serif", fontSize: 14 }}>Cargando…</p>
+      <div style={{ minHeight:"100vh", background:"#1A1612", display:"flex", alignItems:"center", justifyContent:"center" }}>
+        <p style={{ color:"#8C7B6E", fontFamily:"'DM Sans',sans-serif" }}>Cargando...</p>
       </div>
     </>
   );
 
-  // ── MUTATIONS
-  const togglePayment = (tenantId, month) => {
-    const newDb = JSON.parse(JSON.stringify(db));
-    const tn = newDb.tenants.find(x => x.id === tenantId);
-    const p = tn.payments[month]; p.paid = !p.paid; p.date = p.paid ? today() : null;
-    persist(newDb);
-    showToast(p.paid ? t.toast.payRegistered : t.toast.payReverted);
-    if (modal?.type === "tenant-profile") setModal({ type: "tenant-profile", data: { id: tenantId } });
-  };
-
-  const addCost = (tenantId, icon, name, month, amount) => {
-    const newDb = JSON.parse(JSON.stringify(db));
-    const tn = newDb.tenants.find(x => x.id === tenantId);
-    const newId = Math.max(0, ...newDb.tenants.flatMap(x => x.costs.map(c => c.id))) + 1;
-    tn.costs.push({ id: newId, icon, name, month, amount });
-    persist(newDb); showToast(t.toast.costSaved);
-  };
-
-  const changeStatus = (tenantId, maintId, status) => {
-    const newDb = JSON.parse(JSON.stringify(db));
-    newDb.tenants.find(x => x.id === tenantId).maintenance.find(m => m.id === maintId).status = status;
-    persist(newDb); showToast(t.toast.statusUpdated);
-  };
-
-  const sendMaintenance = (tenantId, type, desc) => {
-    const newDb = JSON.parse(JSON.stringify(db));
-    const tn = newDb.tenants.find(x => x.id === tenantId);
-    const newId = Math.max(0, ...newDb.tenants.flatMap(x => x.maintenance.map(m => m.id))) + 1;
-    tn.maintenance.push({ id: newId, type, date: today(), status: "Pendiente", desc });
-    persist(newDb); showToast(t.toast.issueSent);
-  };
-
-  // ── LOGIN
-  if (!role) return (
-    <LangCtx.Provider value={{ lang, t }}>
+  // Lang select (only for non-logged users or tenants without lang)
+  if (!lang && !user) return (
+    <>
       <style>{css}</style>
-      <div className="login-wrap" dir={t.dir}>
-        <h1 className="login-title">{t.appName[0]}<em>{t.appName[1]}</em></h1>
-        <p className="login-sub">{t.loginSub}</p>
-        <div className="lang-bar">
-          <LangPicker current={lang} onChange={changeLang} />
-        </div>
-        <div className="login-cards">
-          <div className="login-card">
-            <div className="ico">🏠</div>
-            <h3>{t.loginOwnerTitle}</h3>
-            <p>{t.loginOwnerDesc}</p>
-            <button className="lbtn lbtn-o" onClick={() => { setRole("owner"); setPage("dashboard"); }}>{t.loginOwnerBtn}</button>
-          </div>
-          <div className="login-card">
-            <div className="ico">🔑</div>
-            <h3>{t.loginTenantTitle}</h3>
-            <p>{t.loginTenantDesc}</p>
-            <button className="lbtn lbtn-t" onClick={() => { setRole("tenant"); setPage("t-home"); }}>{t.loginTenantBtn}</button>
-          </div>
-        </div>
-      </div>
-    </LangCtx.Provider>
+      <LangSelect onSelect={setLang} />
+    </>
   );
 
-  const tenant = db.tenants.find(x => x.id === TENANT_ID);
+  // Login
+  if (!user) return (
+    <>
+      <style>{css}</style>
+      <LoginScreen t={t} onLogin={(u, p) => { setUser(u); setProfile(p); setPage(p.role === "owner" ? "dashboard" : "t-home"); }} />
+    </>
+  );
+
+  // Logged in
   const ownerNav = [
-    { id: "dashboard", icon: "📊", label: t.nav.dashboard },
-    { id: "tenants", icon: "👥", label: t.nav.tenants },
-    { id: "finances", icon: "💰", label: t.nav.finances },
-    { id: "maintenance", icon: "🔧", label: t.nav.maintenance },
+    { id:"dashboard", icon:"📊", label:t.dashboard },
+    { id:"tenants", icon:"👥", label:t.tenants },
+    { id:"finances", icon:"💰", label:t.finances },
+    { id:"maintenance", icon:"🔧", label:t.maintenance },
+    { id:"messages", icon:"💬", label:t.messages },
   ];
   const tenantNav = [
-    { id: "t-home", icon: "🏠", label: t.nav.tHome },
-    { id: "t-costs", icon: "⚡", label: t.nav.tCosts },
-    { id: "t-maint", icon: "🔧", label: t.nav.tMaint },
+    { id:"t-home", icon:"🏠", label:t.myHome },
+    { id:"t-costs", icon:"⚡", label:t.myCosts },
+    { id:"t-maint", icon:"🔧", label:t.incidents },
+    { id:"t-messages", icon:"💬", label:t.messages },
   ];
-  const nav = role === "owner" ? ownerNav : tenantNav;
-  const activeClass = (id) => id === page ? (role === "owner" ? "nav-item active-o" : "nav-item active-t") : "nav-item";
+  const nav = isOwner ? ownerNav : tenantNav;
 
   const renderPage = () => {
-    if (role === "owner") {
-      if (page === "dashboard") return <Dashboard db={db} t={t} onNav={setPage} onToggle={togglePayment} />;
-      if (page === "tenants") return <Tenants db={db} t={t} onSelect={id => setModal({ type: "tenant-profile", data: { id } })} />;
-      if (page === "finances") return <Finances db={db} t={t} onToggle={togglePayment} onAddCost={() => setModal({ type: "add-cost", data: {} })} />;
-      if (page === "maintenance") return <Maintenance db={db} t={t} onStatus={changeStatus} />;
+    if (isOwner) {
+      if (page === "dashboard") return <Dashboard t={t} tenants={tenants} onNav={setPage} onSelect={id => setModal({ type:"profile", id })} />;
+      if (page === "tenants") return <Tenants t={t} tenants={tenants} onSelect={id => setModal({ type:"profile", id })} onNew={() => setModal({ type:"new-tenant" })} />;
+      if (page === "finances") return <Finances t={t} tenants={tenants} onToggle={togglePayment} onAddCost={() => setModal({ type:"add-cost" })} />;
+      if (page === "maintenance") return <Maintenance t={t} tenants={tenants} onStatus={changeStatus} />;
+      if (page === "messages") return <OwnerMessages t={t} tenants={tenants} ownerId={user.uid} />;
     } else {
-      if (page === "t-home") return <TenantHome tenant={tenant} t={t} />;
-      if (page === "t-costs") return <TenantCosts tenant={tenant} t={t} />;
-      if (page === "t-maint") return <TenantMaintenance tenant={tenant} t={t} onSend={sendMaintenance} />;
+      if (page === "t-home") return <TenantHome t={t} profile={profile} />;
+      if (page === "t-costs") return <TenantCosts t={t} profile={profile} />;
+      if (page === "t-maint") return <TenantMaintenance t={t} profile={profile} onSend={sendMaintenance} />;
+      if (page === "t-messages") return <TenantMessages t={t} tenantId={user.uid} />;
     }
   };
+
+  async function togglePayment(tenantId, month) {
+    const t2 = tenants.find(x => x.id === tenantId);
+    if (!t2) return;
+    const payments = { ...(t2.payments || {}) };
+    const cur = payments[month] || { paid: false };
+    payments[month] = { paid: !cur.paid, date: !cur.paid ? today() : null };
+    await persist(doc(db, "users", tenantId), { payments });
+    showToast(payments[month].paid ? "✅ Pago registrado" : "❌ Pago revertido");
+  }
+
+  async function changeStatus(tenantId, maintId, status) {
+    const t2 = tenants.find(x => x.id === tenantId);
+    const maintenance = (t2.maintenance || []).map(m => m.id === maintId ? { ...m, status } : m);
+    await persist(doc(db, "users", tenantId), { maintenance });
+  }
+
+  async function sendMaintenance(type, desc) {
+    const maintenance = [...(profile.maintenance || []), { id: Date.now(), type, date: today(), status: "Pendiente", desc }];
+    await persist(doc(db, "users", user.uid), { maintenance });
+    setProfile(p => ({ ...p, maintenance }));
+  }
 
   const renderModal = () => {
     if (!modal) return null;
-    if (modal.type === "tenant-profile") {
-      const tn = db.tenants.find(x => x.id === modal.data.id);
-      return <TenantProfileModal t={t} tn={tn} onToggle={togglePayment} onAddCost={addCost} onClose={() => setModal(null)} />;
+    if (modal.type === "profile") {
+      const ten = tenants.find(x => x.id === modal.id);
+      return <TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onClose={() => setModal(null)} />;
     }
-    if (modal.type === "add-cost") {
-      return <AddCostModal t={t} tenants={db.tenants} onSave={addCost} onClose={() => setModal(null)} />;
-    }
+    if (modal.type === "new-tenant") return <NewTenantModal t={t} onClose={() => setModal(null)} onSave={createTenant} />;
+    if (modal.type === "add-cost") return <AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={() => setModal(null)} />;
+    return null;
   };
 
+  async function addCost(tenantId, cost) {
+    const ten = tenants.find(x => x.id === tenantId);
+    const costs = [...(ten.costs || []), { id: Date.now(), ...cost }];
+    await persist(doc(db, "users", tenantId), { costs });
+    setModal(null);
+  }
+
+  async function createTenant({ name, unit, phone, rent, email, password }) {
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      await setDoc(doc(db, "users", cred.user.uid), {
+        name, unit, phone, rent: parseFloat(rent), email,
+        role: "tenant", joined: today(),
+        payments: {}, costs: [], maintenance: [], lang: "es"
+      });
+      // sign back in as owner
+      await signInWithEmailAndPassword(auth, OWNER_EMAIL, window._ownerPass || "");
+      setModal(null);
+      showToast("✅ Inquilino creado");
+    } catch (e) {
+      showToast("❌ Error: " + e.message);
+    }
+  }
+
+  const activeClass = (id) => id === page ? (isOwner ? "nav-item active-o" : "nav-item active-t") : "nav-item";
+
   return (
-    <LangCtx.Provider value={{ lang, t }}>
+    <>
       <style>{css}</style>
-      <div className="app" dir={t.dir}>
+      <div className="app">
         <aside className="sidebar">
-          <div className="s-logo">{t.appName[0]}<em>{t.appName[1]}</em></div>
-          <div className="s-role">{role === "owner" ? t.roles.owner : t.roles.tenant}</div>
+          <div className="s-logo">Mi<em>Alquiler</em></div>
+          <div className="s-role">{isOwner ? t.owner : t.tenant}</div>
           <nav className="s-nav">
             {nav.map(item => (
               <button key={item.id} className={activeClass(item.id)} onClick={() => setPage(item.id)}>
@@ -477,18 +589,13 @@ export default function App() {
               </button>
             ))}
           </nav>
-          <div className="s-lang">
-            <LangPicker current={lang} onChange={changeLang} inline />
-          </div>
           <div className="s-footer">
-            <div className="av av-sm" style={{ background: role === "owner" ? "#C4622D" : getColor(TENANT_ID) }}>
-              {role === "owner" ? "CM" : tenant.avatar}
-            </div>
+            <div className="av av-sm" style={{ background: getColor(profile?.name || "") }}>{initials(profile?.name || "?")}</div>
             <div className="s-user-info">
-              <strong>{role === "owner" ? db.owner.name : tenant.name}</strong>
-              <span>{role === "owner" ? t.roles.owner : tenant.unit}</span>
+              <strong>{profile?.name || user.email}</strong>
+              <span>{isOwner ? t.owner : profile?.unit}</span>
             </div>
-            <button className="logout" onClick={() => setRole(null)} title={t.logout}>↩</button>
+            <button className="logout-btn" onClick={() => signOut(auth)} title={t.logout}>↩</button>
           </div>
         </aside>
 
@@ -499,383 +606,517 @@ export default function App() {
       </div>
 
       {modal && (
-        <div className="overlay" dir={t.dir} onClick={e => e.target === e.currentTarget && setModal(null)}>
+        <div className="overlay" onClick={e => e.target === e.currentTarget && setModal(null)}>
           {renderModal()}
         </div>
       )}
 
-      {toast && <div className="toast" dir={t.dir}>{toast}</div>}
-    </LangCtx.Provider>
+      {toast && <div className="toast">{toast}</div>}
+    </>
   );
 }
 
-// ─── OWNER PAGES ──────────────────────────────────────────────────────────────
-function Dashboard({ db, t, onNav, onToggle }) {
-  const totalRent = db.tenants.reduce((s, tn) => s + tn.rent, 0);
-  const paidCount = db.tenants.filter(tn => tn.payments["Marzo 2025"]?.paid).length;
-  const pendingMaint = db.tenants.reduce((s, tn) => s + tn.maintenance.filter(m => m.status === "Pendiente").length, 0);
-  const allMaint = db.tenants.flatMap(tn => tn.maintenance.map(m => ({ ...m, tenant: tn }))).slice(0, 4);
-
+// ── LANG SELECT ───────────────────────────────────────────────────────────────
+function LangSelect({ onSelect }) {
+  const langs = [
+    { code: "es", flag: "🇪🇸", label: "Español" },
+    { code: "en", flag: "🇬🇧", label: "English" },
+    { code: "ar", flag: "🇸🇦", label: "العربية" },
+  ];
   return (
-    <div>
-      <div className="page-hd"><div>
-        <h2>{t.dashboard.title}, Carlos 👋</h2>
-        <p>{t.dashboard.subtitle} · Marzo 2025</p>
-      </div></div>
-      <div className="stats">
-        <div className="stat tl"><div className="lbl">{t.stats.monthly}</div><div className="val">{totalRent}€</div><div className="sub">{t.stats.totalRent}</div></div>
-        <div className="stat sl"><div className="lbl">{t.stats.received}</div><div className="val">{paidCount}/{db.tenants.length}</div><div className="sub">Marzo 2025</div></div>
-        <div className="stat gl"><div className="lbl">{t.stats.tenants}</div><div className="val">{db.tenants.length}</div><div className="sub">{t.stats.active}</div></div>
-        <div className="stat rl"><div className="lbl">{t.stats.maintenance}</div><div className="val">{pendingMaint}</div><div className="sub">{t.stats.pending}</div></div>
-      </div>
-      <div className="g2">
-        <div className="card">
-          <div className="card-title">👥 {t.dashboard.payments} · Marzo 2025</div>
-          {db.tenants.map(tn => {
-            const p = tn.payments["Marzo 2025"];
-            const sc = statusColor(p?.paid ? "Resuelto" : "Pendiente");
-            return (
-              <div key={tn.id} className="t-row" onClick={() => onNav("tenants")}>
-                <div className="av av-md" style={{ background: getColor(tn.id) }}>{tn.avatar}</div>
-                <div className="t-info"><strong>{tn.name}</strong><span>{tn.unit} · {tn.rent}€/mes</span></div>
-                <span className="badge" style={{ background: sc.bg, color: sc.color }}>{p?.paid ? t.paid : t.unpaid}</span>
-              </div>
-            );
-          })}
-        </div>
-        <div className="card">
-          <div className="card-title">🔧 {t.dashboard.recent}</div>
-          {allMaint.length === 0
-            ? <p style={{ color: "var(--warm)", fontSize: 14 }}>{t.dashboard.noMaint}</p>
-            : allMaint.map(m => {
-              const sc = statusColor(m.status);
-              return (
-                <div key={m.id} className="mi">
-                  <div className="mi-icon">{maintIcon(m.type)}</div>
-                  <div className="mi-info"><strong>{m.type}</strong><div className="meta">{m.tenant.name} · {m.date}</div><p>{m.desc}</p></div>
-                  <span className="badge" style={{ background: sc.bg, color: sc.color }}>{t.statuses[m.status]}</span>
-                </div>
-              );
-            })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Tenants({ db, t, onSelect }) {
-  return (
-    <div>
-      <div className="page-hd"><div><h2>{t.tenants.title}</h2><p>{db.tenants.length} {t.tenants.active}</p></div></div>
-      {db.tenants.map(tn => {
-        const p = tn.payments["Marzo 2025"];
-        const sc = statusColor(p?.paid ? "Resuelto" : "Pendiente");
-        return (
-          <div key={tn.id} className="t-row" onClick={() => onSelect(tn.id)}>
-            <div className="av av-md" style={{ background: getColor(tn.id) }}>{tn.avatar}</div>
-            <div className="t-info" style={{ flex: 1 }}><strong>{tn.name}</strong><span>{tn.unit} · {t.tenants.since} {tn.joined}</span></div>
-            <div style={{ textAlign: t.dir === "rtl" ? "left" : "right", marginRight: t.dir === "rtl" ? 0 : 14, marginLeft: t.dir === "rtl" ? 14 : 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 16 }}>{tn.rent}€<span style={{ fontSize: 12, fontWeight: 400, color: "var(--warm)" }}>/mes</span></div>
-              <span className="badge" style={{ background: sc.bg, color: sc.color }}>{p?.paid ? t.tenants.paidMarch : t.tenants.pendingMarch}</span>
-            </div>
-            <span style={{ color: "var(--warm)", fontSize: 20 }}>{t.dir === "rtl" ? "‹" : "›"}</span>
+    <div className="lang-screen">
+      <h1 className="lang-title">Mi<em>Alquiler</em></h1>
+      <div className="lang-cards">
+        {langs.map(l => (
+          <div key={l.code} className="lang-card" onClick={() => onSelect(l.code)}>
+            <div className="flag">{l.flag}</div>
+            <p>{l.label}</p>
           </div>
-        );
-      })}
+        ))}
+      </div>
     </div>
   );
 }
 
-function TenantProfileModal({ t, tn, onToggle, onAddCost, onClose }) {
-  const [costType, setCostType] = useState(t.costTypes[0]);
-  const [costAmt, setCostAmt] = useState("");
-  const [costMonth, setCostMonth] = useState("Marzo 2025");
-  const months = Object.keys(tn.payments);
-  const iconMap = {};
-  t.costTypes.forEach(ct => { const parts = ct.split(" "); iconMap[ct] = parts[0]; });
+// ── LOGIN ─────────────────────────────────────────────────────────────────────
+function LoginScreen({ t, onLogin }) {
+  const [email, setEmail] = useState("");
+  const [pass, setPass] = useState("");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleAddCost = () => {
-    if (!costAmt || !costMonth) return;
-    const icon = iconMap[costType] || "📋";
-    const name = costType.replace(/^\S+\s/, "");
-    onAddCost(tn.id, icon, name, costMonth, parseFloat(costAmt));
-    setCostAmt(""); setCostMonth("Marzo 2025");
+  const handle = async () => {
+    setErr(""); setLoading(true);
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email, pass);
+      window._ownerPass = pass;
+      const snap = await getDoc(doc(db, "users", cred.user.uid));
+      if (snap.exists()) onLogin(cred.user, snap.data());
+    } catch {
+      setErr(t.wrongCredentials);
+    }
+    setLoading(false);
   };
 
   return (
+    <div className="login-wrap">
+      <div className="login-box">
+        <h2>{t.loginTitle}</h2>
+        <p>MiAlquiler · {t.owner} / {t.tenant}</p>
+        {err && <div className="login-err">{err}</div>}
+        <div className="fg"><label>{t.email}</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key==="Enter" && handle()} /></div>
+        <div className="fg"><label>{t.password}</label><input type="password" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key==="Enter" && handle()} /></div>
+        <button className="btn btn-p btn-full" onClick={handle} disabled={loading}>{loading ? "..." : t.login}</button>
+      </div>
+    </div>
+  );
+}
+
+// ── OWNER PAGES ───────────────────────────────────────────────────────────────
+function Dashboard({ t, tenants, onNav, onSelect }) {
+  const totalRent = tenants.reduce((s, t2) => s + (t2.rent || 0), 0);
+  const currentMonth = new Date().toLocaleString("es-ES", { month:"long", year:"numeric" });
+  const paidCount = tenants.filter(t2 => {
+    const payments = t2.payments || {};
+    return Object.values(payments).some(p => p.paid);
+  }).length;
+  const pendingMaint = tenants.reduce((s, t2) => s + (t2.maintenance||[]).filter(m => m.status==="Pendiente").length, 0);
+  const allMaint = tenants.flatMap(t2 => (t2.maintenance||[]).map(m => ({ ...m, tenant: t2 }))).slice(0,4);
+
+  return (
+    <div>
+      <div className="page-hd"><h2>{t.hello} 👋</h2><p>{currentMonth}</p></div>
+      <div className="stats">
+        <div className="stat tl"><div className="lbl">{t.incomeMonth}</div><div className="val">{totalRent}€</div></div>
+        <div className="stat sl"><div className="lbl">{t.paidCount}</div><div className="val">{paidCount}/{tenants.length}</div></div>
+        <div className="stat gl"><div className="lbl">{t.activeTenants}</div><div className="val">{tenants.length}</div></div>
+        <div className="stat rl"><div className="lbl">{t.pendingMaint}</div><div className="val">{pendingMaint}</div></div>
+      </div>
+      <div className="g2">
+        <div className="card">
+          <div className="card-title">👥 {t.tenants}</div>
+          {tenants.length === 0 ? <p style={{color:"var(--warm)",fontSize:14}}>{t.noTenants}</p> :
+            tenants.slice(0,4).map(ten => (
+              <div key={ten.id} className="t-row" onClick={() => onSelect(ten.id)}>
+                <div className="av av-md" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
+                <div className="t-info"><strong>{ten.name}</strong><span>{ten.unit}</span></div>
+                <span style={{color:"var(--warm)",fontSize:18}}>›</span>
+              </div>
+            ))}
+        </div>
+        <div className="card">
+          <div className="card-title">🔧 {t.recentIncidents}</div>
+          {allMaint.length === 0 ? <p style={{color:"var(--warm)",fontSize:14}}>🎉 Sin incidencias</p> :
+            allMaint.map(m => (
+              <div key={m.id} className="mi">
+                <div className="mi-icon">{maintIcons[m.type]||"🔧"}</div>
+                <div className="mi-info"><strong>{m.type}</strong><div className="meta">{m.tenant.name} · {m.date}</div><p>{m.desc}</p></div>
+                <StatusBadge status={m.status} t={t} />
+              </div>
+            ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Tenants({ t, tenants, onSelect, onNew }) {
+  return (
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>{t.tenants}</h2><p>{tenants.length} {t.activeTenants.toLowerCase()}</p></div>
+        <button className="btn btn-p" onClick={onNew}>➕ {t.newTenant}</button>
+      </div>
+      {tenants.length === 0 ? <div className="card"><p style={{color:"var(--warm)",fontSize:14,textAlign:"center",padding:20}}>{t.noTenants}</p></div> :
+        tenants.map(ten => (
+          <div key={ten.id} className="t-row" onClick={() => onSelect(ten.id)}>
+            <div className="av av-md" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
+            <div className="t-info" style={{flex:1}}><strong>{ten.name}</strong><span>{ten.unit} · {t.joinedSince} {ten.joined}</span></div>
+            <div style={{textAlign:"right",marginRight:14}}>
+              <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
+            </div>
+            <span style={{color:"var(--warm)",fontSize:18}}>›</span>
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function Finances({ t, tenants, onToggle, onAddCost }) {
+  const months = ["Enero 2025","Febrero 2025","Marzo 2025"];
+  return (
+    <div>
+      <div className="page-hd"><h2>{t.finances}</h2></div>
+      <div className="card">
+        <div className="card-title">💶 {t.paymentHistory}</div>
+        <div className="tbl-wrap">
+          <table>
+            <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{months.map(m=><th key={m}>{m}</th>)}</tr></thead>
+            <tbody>
+              {tenants.map(ten => (
+                <tr key={ten.id}>
+                  <td><strong>{ten.name}</strong></td>
+                  <td>{ten.unit}</td>
+                  <td>{ten.rent}€</td>
+                  {months.map(m => {
+                    const p = (ten.payments||{})[m];
+                    return (
+                      <td key={m}>
+                        <span className="badge" style={p?.paid ? {background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"} : {background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}}
+                          onClick={() => onToggle(ten.id, m)}>
+                          {p?.paid ? `✓ ${p.date}` : "✗ Pend."}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="card">
+        <div className="card-title">⚡ {t.costBreakdown}</div>
+        <div className="tbl-wrap">
+          <table>
+            <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>{t.month}</th><th>{t.amount}</th></tr></thead>
+            <tbody>
+              {tenants.flatMap(ten => (ten.costs||[]).map(c => (
+                <tr key={c.id}><td>{ten.name}</td><td>{c.icon} {c.name}</td><td>{c.month}</td><td>{c.amount}€</td></tr>
+              )))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+      </div>
+    </div>
+  );
+}
+
+function Maintenance({ t, tenants, onStatus }) {
+  const all = tenants.flatMap(ten => (ten.maintenance||[]).map(m => ({ ...m, tenant: ten })));
+  return (
+    <div>
+      <div className="page-hd"><h2>{t.maintenance}</h2><p>{all.filter(m=>m.status==="Pendiente").length} {t.pending.toLowerCase()}</p></div>
+      {all.length === 0 ? <div className="card"><p style={{color:"var(--warm)",textAlign:"center",padding:20}}>🎉 {t.noIncidents}</p></div> :
+        all.map(m => (
+          <div key={m.id} className="mi">
+            <div className="mi-icon">{maintIcons[m.type]||"🔧"}</div>
+            <div className="mi-info"><strong>{m.type}</strong><div className="meta">{m.tenant.name} · {m.tenant.unit} · {m.date}</div><p>{m.desc}</p></div>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>
+              <StatusBadge status={m.status} t={t} />
+              <select className="status-sel" value={m.status} onChange={e => onStatus(m.tenant.id, m.id, e.target.value)}>
+                <option>Pendiente</option><option>En revisión</option><option>Resuelto</option>
+              </select>
+            </div>
+          </div>
+        ))}
+    </div>
+  );
+}
+
+// ── MESSAGES ─────────────────────────────────────────────────────────────────
+function OwnerMessages({ t, tenants, ownerId }) {
+  const [activeTenant, setActiveTenant] = useState(tenants[0]?.id || null);
+  useEffect(() => { if (!activeTenant && tenants.length > 0) setActiveTenant(tenants[0].id); }, [tenants]);
+  if (tenants.length === 0) return <div className="page-hd"><h2>{t.messages}</h2><p style={{color:"var(--warm)"}}>{t.noTenants}</p></div>;
+  return (
+    <div>
+      <div className="page-hd"><h2>{t.messages}</h2></div>
+      <div className="chat-tabs">
+        {tenants.map(ten => (
+          <button key={ten.id} className={`chat-tab ${activeTenant===ten.id?"active":""}`} onClick={() => setActiveTenant(ten.id)}>
+            {ten.name.split(" ")[0]}
+          </button>
+        ))}
+      </div>
+      {activeTenant && <ChatWindow roomId={[ownerId, activeTenant].sort().join("_")} senderId={ownerId} t={t} />}
+    </div>
+  );
+}
+
+function TenantMessages({ t, tenantId }) {
+  const [ownerId, setOwnerId] = useState(null);
+  useEffect(() => {
+    const q = query(collection(db, "users"), where("role","==","owner"));
+    onSnapshot(q, snap => { if (!snap.empty) setOwnerId(snap.docs[0].id); });
+  }, []);
+  if (!ownerId) return <div className="page-hd"><h2>{t.messages}</h2></div>;
+  const roomId = [ownerId, tenantId].sort().join("_");
+  return (
+    <div>
+      <div className="page-hd"><h2>{t.messages}</h2></div>
+      <ChatWindow roomId={roomId} senderId={tenantId} t={t} />
+    </div>
+  );
+}
+
+function ChatWindow({ roomId, senderId, t }) {
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState("");
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    const q = query(collection(db, "chats", roomId, "messages"), orderBy("createdAt"));
+    const unsub = onSnapshot(q, snap => {
+      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return unsub;
+  }, [roomId]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages]);
+
+  const sendMsg = async () => {
+    if (!text.trim()) return;
+    await addDoc(collection(db, "chats", roomId, "messages"), {
+      text: text.trim(), senderId, createdAt: serverTimestamp()
+    });
+    setText("");
+  };
+
+  return (
+    <div className="chat-wrap">
+      <div className="chat-messages">
+        {messages.length === 0 && <p style={{color:"var(--warm)",fontSize:14,textAlign:"center",margin:"auto"}}>{t.noMessages}</p>}
+        {messages.map(m => (
+          <div key={m.id} className={`msg ${m.senderId===senderId?"mine":"theirs"}`}>
+            {m.text}
+            <div className="msg-meta">{m.createdAt?.toDate?.()?.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+      <div className="chat-input">
+        <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key==="Enter" && sendMsg()} placeholder={t.typeMsg} />
+        <button className="btn btn-p" onClick={sendMsg}>↑</button>
+      </div>
+    </div>
+  );
+}
+
+// ── TENANT PAGES ──────────────────────────────────────────────────────────────
+function TenantHome({ t, profile }) {
+  if (!profile) return null;
+  const months = Object.keys(profile.payments || {});
+  const current = months[months.length - 1] || "";
+  const p = (profile.payments || {})[current] || { paid: false };
+
+  return (
+    <div>
+      <div className="page-hd"><h2>{t.hello}, {profile.name?.split(" ")[0]} 👋</h2><p>{profile.unit}</p></div>
+      <div className="pay-box" style={p.paid
+        ? {background:"linear-gradient(135deg,#E6F4ED,#D0EBDA)",border:"2px solid #4A9B6F"}
+        : {background:"linear-gradient(135deg,#FDECEA,#FAD8D5)",border:"2px solid #D94F3D"}}>
+        <div className="sico">{p.paid ? "✅" : "⚠️"}</div>
+        <h3>{p.paid ? `${t.paid} ✓` : t.pending}</h3>
+        <div className="amount">{profile.rent}€</div>
+        <p>{p.paid ? `${t.registered} ${p.date}` : `${t.dueThisMonth} · ${current}`}</p>
+      </div>
+      <div className="card">
+        <div className="card-title">📋 {t.paymentHistory}</div>
+        {months.length === 0 ? <p style={{color:"var(--warm)",fontSize:14}}>{t.pending}</p> :
+          months.map(m => {
+            const pm = (profile.payments||{})[m];
+            return (
+              <div key={m} className="cr">
+                <div className="cn">{m}</div>
+                <span className="badge" style={pm.paid?{background:"#E6F4ED",color:"#4A9B6F"}:{background:"#FDECEA",color:"#D94F3D"}}>
+                  {pm.paid ? `✓ ${pm.date}` : "✗ Pendiente"}
+                </span>
+              </div>
+            );
+          })}
+      </div>
+    </div>
+  );
+}
+
+function TenantCosts({ t, profile }) {
+  const costs = profile?.costs || [];
+  const total = costs.reduce((s, c) => s + (c.amount||0), 0);
+  return (
+    <div>
+      <div className="page-hd"><h2>{t.myCosts}</h2></div>
+      <div className="stats">
+        <div className="stat gl"><div className="lbl">{t.totalCosts}</div><div className="val">{total}€</div></div>
+        <div className="stat tl"><div className="lbl">{t.monthlyRent}</div><div className="val">{profile?.rent}€</div></div>
+      </div>
+      <div className="card">
+        <div className="card-title">⚡ {t.costBreakdown}</div>
+        {costs.length === 0 ? <p style={{color:"var(--warm)",fontSize:14}}>{t.noCosts}</p> :
+          costs.map(c => (
+            <div key={c.id} className="cr">
+              <div className="cn"><span style={{fontSize:20}}>{c.icon}</span><div><div>{c.name}</div><div style={{fontSize:12,color:"var(--warm)"}}>{c.month}</div></div></div>
+              <div className="ca">{c.amount}€</div>
+            </div>
+          ))}
+        {costs.length > 0 && <><hr /><div className="cr"><div className="cn"><strong>Total</strong></div><div className="ca" style={{fontSize:18}}>{total}€</div></div></>}
+      </div>
+    </div>
+  );
+}
+
+function TenantMaintenance({ t, profile, onSend }) {
+  const [type, setType] = useState("Fontanería");
+  const [desc, setDesc] = useState("");
+  const types = ["Fontanería","Electricidad","Calefacción","Ventanas","Electrodomésticos","Otros"];
+  const handle = () => { if (!desc.trim()) return; onSend(type, desc.trim()); setDesc(""); };
+
+  return (
+    <div>
+      <div className="page-hd"><h2>{t.incidents}</h2></div>
+      <div className="card">
+        <div className="card-title">➕ {t.sendIncident}</div>
+        <div className="fg"><label>{t.incidentType}</label>
+          <select value={type} onChange={e => setType(e.target.value)}>
+            {types.map(o => <option key={o}>{o}</option>)}
+          </select>
+        </div>
+        <div className="fg"><label>{t.description}</label>
+          <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="..." />
+        </div>
+        <button className="btn btn-s" onClick={handle}>📤 {t.sendIncident}</button>
+      </div>
+      <div className="card">
+        <div className="card-title">🕐 {t.incidents}</div>
+        {(profile?.maintenance||[]).length === 0 ? <p style={{color:"var(--warm)",fontSize:14}}>{t.noIncidents}</p> :
+          (profile.maintenance||[]).map(m => (
+            <div key={m.id} className="mi">
+              <div className="mi-icon">{maintIcons[m.type]||"🔧"}</div>
+              <div className="mi-info"><strong>{m.type}</strong><div className="meta">{m.date}</div><p>{m.desc}</p></div>
+              <StatusBadge status={m.status} t={t} />
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+// ── MODALS ────────────────────────────────────────────────────────────────────
+function TenantProfileModal({ t, tenant, onToggle, onAddCost, onClose }) {
+  const [costType, setCostType] = useState("💡 Electricidad");
+  const [costAmt, setCostAmt] = useState("");
+  const [costMonth, setCostMonth] = useState("Marzo 2025");
+  const months = Object.keys(tenant?.payments || {});
+  const icons = {"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","Otro":"📋"};
+
+  const handleAddCost = () => {
+    if (!costAmt || !costMonth) return;
+    const icon = icons[costType]||"📋";
+    const name = costType.replace(/^\S+\s/,"");
+    onAddCost(tenant.id, { icon, name, month: costMonth, amount: parseFloat(costAmt) });
+    setCostAmt("");
+  };
+
+  if (!tenant) return null;
+  return (
     <div className="modal">
-      <div className="modal-hd"><h3>{tn.name}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="modal-hd"><h3>{tenant.name}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
       <div className="prof-hd">
-        <div className="av av-lg" style={{ background: getColor(tn.id) }}>{tn.avatar}</div>
-        <div className="prof-hd-info"><h3>{tn.name}</h3><p>{tn.unit} · {t.profile.since}: {tn.joined}</p></div>
+        <div className="av av-lg" style={{background:getColor(tenant.name)}}>{initials(tenant.name)}</div>
+        <div className="prof-hd-info"><h3>{tenant.name}</h3><p>{tenant.unit} · {t.joinedSince} {tenant.joined}</p></div>
       </div>
       <div className="prof-grid">
-        <div><div className="pf-lbl">{t.profile.phone}</div><div className="pf-val">{tn.phone}</div></div>
-        <div><div className="pf-lbl">{t.profile.email}</div><div className="pf-val">{tn.email}</div></div>
-        <div><div className="pf-lbl">{t.profile.rent}</div><div className="pf-val">{tn.rent}€/mes</div></div>
-        <div><div className="pf-lbl">{t.profile.since}</div><div className="pf-val">{tn.joined}</div></div>
+        <div><div className="pf-lbl">{t.phone}</div><div className="pf-val">{tenant.phone}</div></div>
+        <div><div className="pf-lbl">{t.email}</div><div className="pf-val">{tenant.email}</div></div>
+        <div><div className="pf-lbl">{t.rent}</div><div className="pf-val">{tenant.rent}€/mes</div></div>
+        <div><div className="pf-lbl">{t.joinedSince}</div><div className="pf-val">{tenant.joined}</div></div>
       </div>
       <hr />
-      <div className="serif" style={{ fontSize: 16, marginBottom: 12 }}>{t.profile.history}</div>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>{t.paymentHistory}</div>
       {months.map(m => {
-        const p = tn.payments[m]; const sc = statusColor(p.paid ? "Resuelto" : "Pendiente");
+        const p = (tenant.payments||{})[m];
         return (
           <div key={m} className="cr">
             <div className="cn">{m}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span className="badge" style={{ background: sc.bg, color: sc.color }}>{p.paid ? `✓ ${p.date}` : t.unpaid}</span>
-              <button className="btn btn-o btn-sm" onClick={() => onToggle(tn.id, m)}>{p.paid ? t.profile.revert : t.profile.markPaid}</button>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span className="badge" style={p.paid?{background:"#E6F4ED",color:"#4A9B6F"}:{background:"#FDECEA",color:"#D94F3D"}}>
+                {p.paid ? `✓ ${p.date}` : "✗ Pendiente"}
+              </span>
+              <button className="btn btn-o btn-sm" onClick={() => onToggle(tenant.id, m)}>
+                {p.paid ? t.revert : t.markPaid}
+              </button>
             </div>
           </div>
         );
       })}
       <hr />
-      <div className="serif" style={{ fontSize: 16, marginBottom: 12 }}>{t.profile.addCost}</div>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>➕ {t.addCost}</div>
       <div className="gr2">
-        <div className="fg"><label>{t.profile.concept}</label>
+        <div className="fg"><label>{t.concept}</label>
           <select value={costType} onChange={e => setCostType(e.target.value)}>
-            {t.costTypes.map(o => <option key={o}>{o}</option>)}
+            {["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","Otro"].map(o=><option key={o}>{o}</option>)}
           </select>
         </div>
-        <div className="fg"><label>{t.profile.amount}</label>
-          <input type="number" value={costAmt} onChange={e => setCostAmt(e.target.value)} placeholder="0" />
-        </div>
+        <div className="fg"><label>{t.amount}</label><input type="number" value={costAmt} onChange={e => setCostAmt(e.target.value)} placeholder="0" /></div>
       </div>
-      <div className="fg"><label>{t.profile.month}</label>
-        <input value={costMonth} onChange={e => setCostMonth(e.target.value)} />
+      <div className="fg"><label>{t.month}</label><input value={costMonth} onChange={e => setCostMonth(e.target.value)} /></div>
+      <button className="btn btn-p" onClick={handleAddCost}>➕ {t.addCost}</button>
+    </div>
+  );
+}
+
+function NewTenantModal({ t, onClose, onSave }) {
+  const [form, setForm] = useState({ name:"", unit:"", phone:"", rent:"", email:"", password:"" });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  return (
+    <div className="modal">
+      <div className="modal-hd"><h3>➕ {t.newTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e => set("name",e.target.value)} /></div>
+      <div className="gr2">
+        <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e => set("unit",e.target.value)} /></div>
+        <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e => set("phone",e.target.value)} /></div>
       </div>
-      <button className="btn btn-p" onClick={handleAddCost}>{t.profile.save}</button>
+      <div className="fg"><label>{t.rent}</label><input type="number" value={form.rent} onChange={e => set("rent",e.target.value)} /></div>
+      <hr />
+      <div className="fg"><label>{t.email} (acceso)</label><input type="email" value={form.email} onChange={e => set("email",e.target.value)} /></div>
+      <div className="fg"><label>{t.password}</label><input type="password" value={form.password} onChange={e => set("password",e.target.value)} /></div>
+      <button className="btn btn-p btn-full" onClick={() => onSave(form)}>{t.createAccess}</button>
     </div>
   );
 }
 
 function AddCostModal({ t, tenants, onSave, onClose }) {
-  const [tid, setTid] = useState(tenants[0]?.id);
-  const [costType, setCostType] = useState(t.costTypes[0]);
+  const [tid, setTid] = useState(tenants[0]?.id || "");
+  const [costType, setCostType] = useState("💡 Electricidad");
   const [amount, setAmount] = useState("");
   const [month, setMonth] = useState("Marzo 2025");
-  const iconMap = {}; t.costTypes.forEach(ct => { iconMap[ct] = ct.split(" ")[0]; });
-
+  const icons = {"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","Otro":"📋"};
   const handle = () => {
     if (!amount) return;
-    onSave(parseInt(tid), iconMap[costType] || "📋", costType.replace(/^\S+\s/, ""), month, parseFloat(amount));
-    onClose();
+    const icon = icons[costType]||"📋";
+    const name = costType.replace(/^\S+\s/,"");
+    onSave(tid, { icon, name, month, amount: parseFloat(amount) });
   };
-
   return (
     <div className="modal">
-      <div className="modal-hd"><h3>{t.addCostModal.title}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-      <div className="fg"><label>{t.addCostModal.tenantLabel}</label>
+      <div className="modal-hd"><h3>➕ {t.addCost}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="fg"><label>{t.tenant}</label>
         <select value={tid} onChange={e => setTid(e.target.value)}>
-          {tenants.map(tn => <option key={tn.id} value={tn.id}>{tn.name} ({tn.unit})</option>)}
+          {tenants.map(ten => <option key={ten.id} value={ten.id}>{ten.name} ({ten.unit})</option>)}
         </select>
       </div>
       <div className="gr2">
-        <div className="fg"><label>{t.profile.concept}</label>
+        <div className="fg"><label>{t.concept}</label>
           <select value={costType} onChange={e => setCostType(e.target.value)}>
-            {t.costTypes.map(o => <option key={o}>{o}</option>)}
+            {["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","Otro"].map(o=><option key={o}>{o}</option>)}
           </select>
         </div>
-        <div className="fg"><label>{t.profile.amount}</label>
-          <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" />
-        </div>
+        <div className="fg"><label>{t.amount}</label><input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" /></div>
       </div>
-      <div className="fg"><label>{t.profile.month}</label><input value={month} onChange={e => setMonth(e.target.value)} /></div>
-      <button className="btn btn-p" onClick={handle}>{t.addCostModal.save}</button>
+      <div className="fg"><label>{t.month}</label><input value={month} onChange={e => setMonth(e.target.value)} /></div>
+      <button className="btn btn-p btn-full" onClick={handle}>{t.save}</button>
     </div>
   );
 }
 
-function Finances({ db, t, onToggle, onAddCost }) {
-  const months = ["Enero 2025", "Febrero 2025", "Marzo 2025"];
-  return (
-    <div>
-      <div className="page-hd"><div><h2>{t.finances.title}</h2><p>{t.finances.sub}</p></div></div>
-      <div className="card">
-        <div className="card-title">{t.finances.rentTable}</div>
-        <div className="tbl-wrap">
-          <table>
-            <thead><tr>
-              <th>{t.finances.tenant}</th><th>{t.finances.unit}</th><th>{t.finances.rentCol}</th>
-              {months.map(m => <th key={m}>{m}</th>)}
-            </tr></thead>
-            <tbody>
-              {db.tenants.map(tn => (
-                <tr key={tn.id}>
-                  <td><strong>{tn.name}</strong></td><td>{tn.unit}</td><td>{tn.rent}€</td>
-                  {months.map(m => {
-                    const p = tn.payments[m];
-                    if (!p) return <td key={m}><span className="badge" style={{ background: "#F0ECE8", color: "#8C7B6E" }}>—</span></td>;
-                    const sc = statusColor(p.paid ? "Resuelto" : "Pendiente");
-                    return <td key={m}><span className="badge" style={{ background: sc.bg, color: sc.color, cursor: "pointer" }} onClick={() => onToggle(tn.id, m)}>{p.paid ? `✓ ${p.date}` : t.pendingShort}</span></td>;
-                  })}
-                </tr>
-              ))}
-              <tr style={{ background: "var(--cream)" }}>
-                <td colSpan="2"><strong>{t.finances.total}</strong></td>
-                <td><strong>{db.tenants.reduce((s, tn) => s + tn.rent, 0)}€</strong></td>
-                {months.map(m => <td key={m}><strong>{db.tenants.filter(tn => tn.payments[m]?.paid).reduce((s, tn) => s + tn.rent, 0)}€</strong></td>)}
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div className="card">
-        <div className="card-title">{t.finances.costTable}</div>
-        <div className="tbl-wrap">
-          <table>
-            <thead><tr><th>{t.finances.tenant}</th><th>{t.profile.concept}</th><th>{t.profile.month}</th><th>{t.profile.amount}</th></tr></thead>
-            <tbody>
-              {db.tenants.flatMap(tn => tn.costs.map(c => (
-                <tr key={c.id}><td>{tn.name}</td><td>{c.icon} {c.name}</td><td>{c.month}</td><td>{c.amount}€</td></tr>
-              )))}
-            </tbody>
-          </table>
-        </div>
-        <div style={{ marginTop: 14 }}><button className="btn btn-p" onClick={onAddCost}>{t.finances.addCost}</button></div>
-      </div>
-    </div>
-  );
-}
-
-function Maintenance({ db, t, onStatus }) {
-  const all = db.tenants.flatMap(tn => tn.maintenance.map(m => ({ ...m, tenant: tn })));
-  return (
-    <div>
-      <div className="page-hd"><div>
-        <h2>{t.maint.title}</h2>
-        <p>{all.filter(m => m.status === "Pendiente").length} {t.maint.pending} · {all.length} {t.maint.total}</p>
-      </div></div>
-      {all.length === 0
-        ? <div className="card"><p style={{ color: "var(--warm)", textAlign: "center", padding: 20 }}>{t.maint.noIssues}</p></div>
-        : all.map(m => {
-          const sc = statusColor(m.status);
-          return (
-            <div key={m.id} className="mi">
-              <div className="mi-icon">{maintIcon(m.type)}</div>
-              <div className="mi-info">
-                <strong>{m.type}</strong>
-                <div className="meta">{m.tenant.name} · {m.tenant.unit} · {m.date}</div>
-                <p>{m.desc}</p>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-                <span className="badge" style={{ background: sc.bg, color: sc.color }}>{t.statuses[m.status]}</span>
-                <select className="status-sel" value={m.status} onChange={e => onStatus(m.tenant.id, m.id, e.target.value)}>
-                  {t.statusOptions.map(s => <option key={s} value={s}>{t.statuses[s]}</option>)}
-                </select>
-              </div>
-            </div>
-          );
-        })}
-    </div>
-  );
-}
-
-// ─── TENANT PAGES ─────────────────────────────────────────────────────────────
-function TenantHome({ tenant: tn, t }) {
-  const months = Object.keys(tn.payments);
-  const current = months[months.length - 1];
-  const p = tn.payments[current];
-  return (
-    <div>
-      <div className="page-hd"><div>
-        <h2>{t.tHome.hello}, {tn.name.split(" ")[0]} 👋</h2>
-        <p>{tn.unit} · {current}</p>
-      </div></div>
-      <div className="pay-status" style={p.paid
-        ? { background: "linear-gradient(135deg,#E6F4ED,#D0EBDA)", border: "2px solid #4A9B6F" }
-        : { background: "linear-gradient(135deg,#FDECEA,#FAD8D5)", border: "2px solid #D94F3D" }}>
-        <div className="sico">{p.paid ? "✅" : "⚠️"}</div>
-        <h3>{p.paid ? t.tHome.paid : t.tHome.unpaid}</h3>
-        <div className="amount">{tn.rent}€</div>
-        <p>{p.paid ? `${t.tHome.registeredOn} ${p.date}` : `${t.tHome.dueThis} · ${current}`}</p>
-      </div>
-      <div className="g2">
-        <div className="card">
-          <div className="card-title">{t.tHome.history}</div>
-          {months.map(m => {
-            const pm = tn.payments[m]; const sc = statusColor(pm.paid ? "Resuelto" : "Pendiente");
-            return <div key={m} className="cr"><div className="cn">{m}</div><span className="badge" style={{ background: sc.bg, color: sc.color }}>{pm.paid ? `✓ ${pm.date}` : t.unpaid}</span></div>;
-          })}
-        </div>
-        <div className="card">
-          <div className="card-title">{t.tHome.info}</div>
-          <div className="prof-grid">
-            <div><div className="pf-lbl">{t.tHome.unitLabel}</div><div className="pf-val">{tn.unit}</div></div>
-            <div><div className="pf-lbl">{t.tHome.rentLabel}</div><div className="pf-val">{tn.rent}€/mes</div></div>
-            <div><div className="pf-lbl">{t.tHome.sinceLabel}</div><div className="pf-val">{tn.joined}</div></div>
-            <div><div className="pf-lbl">{t.tHome.ownerLabel}</div><div className="pf-val">Carlos M.</div></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TenantCosts({ tenant: tn, t }) {
-  const total = tn.costs.reduce((s, c) => s + c.amount, 0);
-  return (
-    <div>
-      <div className="page-hd"><div><h2>{t.tCosts.title}</h2><p>{t.tCosts.sub}</p></div></div>
-      <div className="stats">
-        <div className="stat gl"><div className="lbl">{t.tCosts.totalCosts}</div><div className="val">{total}€</div></div>
-        <div className="stat tl"><div className="lbl">{t.tCosts.fixedRent}</div><div className="val">{tn.rent}€</div></div>
-      </div>
-      <div className="card">
-        <div className="card-title">{t.tCosts.breakdown}</div>
-        {tn.costs.length === 0 ? <p style={{ color: "var(--warm)", fontSize: 14 }}>{t.tCosts.noCosts}</p>
-          : tn.costs.map(c => (
-            <div key={c.id} className="cr">
-              <div className="cn"><span style={{ fontSize: 20 }}>{c.icon}</span><div><div>{c.name}</div><div style={{ fontSize: 12, color: "var(--warm)" }}>{c.month}</div></div></div>
-              <div className="ca">{c.amount}€</div>
-            </div>
-          ))}
-        <hr />
-        <div className="cr"><div className="cn"><strong>{t.tCosts.totalLabel}</strong></div><div className="ca" style={{ fontSize: 18 }}>{total}€</div></div>
-      </div>
-    </div>
-  );
-}
-
-function TenantMaintenance({ tenant: tn, t, onSend }) {
-  const [type, setType] = useState(t.maintTypes[0]);
-  const [desc, setDesc] = useState("");
-
-  const handle = () => {
-    if (!desc.trim()) return;
-    onSend(tn.id, type, desc.trim());
-    setDesc("");
+// ── STATUS BADGE ──────────────────────────────────────────────────────────────
+function StatusBadge({ status, t }) {
+  const map = {
+    "Pendiente": { bg:"#FDECEA", color:"#D94F3D", label: t?.pending || "Pendiente" },
+    "En revisión": { bg:"#FDF6E3", color:"#D4A853", label: t?.inReview || "En revisión" },
+    "Resuelto": { bg:"#E6F4ED", color:"#4A9B6F", label: t?.resolved || "Resuelto" },
   };
-
-  return (
-    <div>
-      <div className="page-hd"><div><h2>{t.tMaint.title}</h2><p>{t.tMaint.sub}</p></div></div>
-      <div className="card">
-        <div className="card-title">{t.tMaint.newIssue}</div>
-        <div className="fg"><label>{t.tMaint.typeLabel}</label>
-          <select value={type} onChange={e => setType(e.target.value)}>
-            {t.maintTypes.map(o => <option key={o}>{o}</option>)}
-          </select>
-        </div>
-        <div className="fg"><label>{t.tMaint.descLabel}</label>
-          <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder={t.tMaint.descPlaceholder} />
-        </div>
-        <button className="btn btn-s" onClick={handle}>{t.tMaint.send}</button>
-      </div>
-      <div className="card">
-        <div className="card-title">{t.tMaint.history}</div>
-        {tn.maintenance.length === 0 ? <p style={{ color: "var(--warm)", fontSize: 14 }}>{t.tMaint.noSent}</p>
-          : tn.maintenance.map(m => {
-            const sc = statusColor(m.status);
-            return (
-              <div key={m.id} className="mi">
-                <div className="mi-icon">{maintIcon(m.type)}</div>
-                <div className="mi-info"><strong>{m.type}</strong><div className="meta">{m.date}</div><p>{m.desc}</p></div>
-                <span className="badge" style={{ background: sc.bg, color: sc.color }}>{t.statuses[m.status]}</span>
-              </div>
-            );
-          })}
-      </div>
-    </div>
-  );
+  const s = map[status] || { bg:"#F0ECE8", color:"#8C7B6E", label: status };
+  return <span className="badge" style={{ background:s.bg, color:s.color }}>{s.label}</span>;
 }
