@@ -172,6 +172,32 @@ body{font-family:'DM Sans',sans-serif;background:var(--cream);color:var(--dark);
 .login-err{background:#3D1A18;border:1px solid var(--red);color:#F5A49A;padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:16px}
 .app{display:flex;min-height:100vh}
 .sidebar{width:220px;background:var(--dark);display:flex;flex-direction:column;padding:28px 16px;position:fixed;top:0;left:0;bottom:0;z-index:50}
+@media(max-width:600px){
+  .sidebar{width:100%!important;height:60px;top:auto;bottom:0;left:0;right:0;flex-direction:row;padding:0;overflow:hidden!important}
+  .s-logo,.s-role,.s-user-info,.notif-wrap,.logout-btn{display:none!important}
+  .s-nav{flex-direction:row;flex:1;gap:0;justify-content:space-around;align-items:center}
+  .nav-item{flex-direction:column;padding:6px 4px;font-size:10px;gap:2px;border-radius:8px;justify-content:center;align-items:center;flex:1}
+  .nav-item span{font-size:20px}
+  .nav-item.active-o{background:var(--terra);color:#fff}
+  .nav-item.active-t{background:var(--sage);color:#fff}
+  .s-footer{display:none!important}
+  .content{margin-left:0!important;padding:16px 12px 80px!important}
+  .modal{padding:20px 16px;max-height:95vh;border-radius:20px 20px 0 0;margin-bottom:0;align-self:flex-end}
+  .overlay{align-items:flex-end;padding:0}
+  .gr2{grid-template-columns:1fr!important}
+  .g2{grid-template-columns:1fr!important}
+  .stats{grid-template-columns:1fr 1fr!important}
+  .chat-wrap{height:calc(100vh - 180px)}
+  table{font-size:12px}
+  th,td{padding:8px 8px}
+  .tbl-wrap{font-size:12px}
+  .page-hd h2{font-size:24px}
+  .btn{padding:8px 14px;font-size:13px}
+  .toast{bottom:70px;right:12px;left:12px;text-align:center}
+  .notif-panel{bottom:auto;top:auto;right:0;left:0;width:100%;border-radius:16px}
+  .pay-box{padding:20px}
+  .pay-box .amount{font-size:32px}
+}
 .s-logo{font-family:'DM Serif Display',serif;font-size:22px;color:var(--cream);padding:0 10px}
 .s-logo em{color:var(--terra-l);font-style:italic}
 .s-role{font-size:11px;color:var(--warm);text-transform:uppercase;letter-spacing:1px;padding:0 10px;margin:4px 0 24px}
@@ -487,6 +513,33 @@ export default function App() {
             <button className="logout-btn" onClick={()=>signOut(auth)} title={t.logout}>↩</button>
           </div>
         </aside>
+        <div className="mobile-topbar">
+          <div className="m-logo">Mi<em>Alquiler</em></div>
+          <div className="mobile-topbar-right">
+            {isOwner&&(
+              <div className="notif-wrap">
+                <button className="notif-btn" onClick={e=>{e.stopPropagation();setShowNotif(v=>!v);}}>
+                  🔔{anniversaries.length>0&&<span className="notif-dot"/>}
+                </button>
+                {showNotif&&(
+                  <div className="notif-panel" onClick={e=>e.stopPropagation()}>
+                    <div className="notif-panel-title">{t.notifications}</div>
+                    {anniversaries.length===0
+                      ?<div style={{fontSize:13,color:"var(--warm)"}}>{t.noNotifications}</div>
+                      :anniversaries.map((a,i)=>(
+                        <div key={i} className="notif-item">
+                          {a.type==="ipc"&&`📈 ${a.tenant.name} · Subida IPC (${a.years} año/s)`}
+                          {a.type==="signed_today"&&`📝 ${a.tenant.name} · Firmado hoy`}
+                          {a.type==="expiring"&&`⚠️ ${a.tenant.name} · Expira en ${a.daysLeft} días`}
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <button style={{background:"none",border:"none",color:"var(--warm)",cursor:"pointer",fontSize:16}} onClick={()=>signOut(auth)}>↩</button>
+          </div>
+        </div>
         <main className="content fade" key={page} style={{marginLeft:sidebarOpen?"220px":"64px",transition:"margin-left .25s"}} onClick={()=>setShowNotif(false)}>
           {saving&&<div className="saving">{t.saving}</div>}
           {isOwner&&anniversaries.length>0&&page==="dashboard"&&anniversaries.map((a,i)=>(
