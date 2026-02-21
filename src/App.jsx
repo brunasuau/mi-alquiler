@@ -420,6 +420,13 @@ export default function App() {
     setModal(null);showToast("✅ Coste añadido");
   }
 
+  async function deleteCost(tenantId,costId){
+    const ten=tenants.find(x=>x.id===tenantId);
+    const costs=(ten.costs||[]).filter(c=>c.id!==costId);
+    await persist(doc(db,"users",tenantId),{costs});
+    showToast("🗑️ Coste eliminado");
+  }
+
   async function createTenant({name,unit,phone,rent,email,password,contractStart,contractEnd}){
     try{
       const cred=await createUserWithEmailAndPassword(auth,email,password);
@@ -442,7 +449,7 @@ export default function App() {
     if(isOwner){
       if(page==="dashboard")return<Dashboard t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})}/>;
       if(page==="tenants")return<Tenants t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
-      if(page==="finances")return<Finances t={t} tenants={tenants} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})}/>;
+      if(page==="finances")return<Finances t={t} tenants={tenants} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onDeleteCost={deleteCost}/>;
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
@@ -456,7 +463,7 @@ export default function App() {
 
   const renderModal=()=>{
     if(!modal)return null;
-    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})}/>;}
+    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})}/>;}
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
@@ -647,7 +654,7 @@ function Tenants({t,tenants,onSelect,onNew,onEdit}){
   );
 }
 
-function Finances({t,tenants,onToggle,onAddCost}){
+function Finances({t,tenants,onToggle,onAddCost,onDeleteCost}){
   const now=new Date();
   const startYear=2024; const endYear=startYear+15;
   const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -730,17 +737,21 @@ function Finances({t,tenants,onToggle,onAddCost}){
           <div className="card-title">⚡ {t.costBreakdown} · {selYear}</div>
           <div className="tbl-wrap">
             <table>
-              <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th></tr></thead>
+              <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
               <tbody>
                 {tenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>(
                   <tr key={c.id}>
                     <td>{ten.name}</td>
-                    <td>{c.icon} {c.name}</td>
+                    <td>
+                      <div>{c.icon} {c.name}</div>
+                      {c.nota&&<div style={{fontSize:11,color:"var(--warm)",marginTop:2}}>📝 {c.nota}</div>}
+                    </td>
                     <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>
                       {c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}
                     </span></td>
                     <td>{c.month}</td>
                     <td>{c.amount}€</td>
+                    <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(ten.id,c.id)}>🗑️</button></td>
                   </tr>
                 )))}
               </tbody>
@@ -1006,7 +1017,7 @@ function TenantMaintenance({t,profile,onSend}){
   );
 }
 
-function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
+function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,onEdit}){
   const now=new Date();
   const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
   const startYear=2024;
@@ -1018,13 +1029,14 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
   const [costTipo,setCostTipo]=useState("gasto");
   const [costAmt,setCostAmt]=useState("");
   const [costMonth,setCostMonth]=useState(currentMonth);
+  const [costNota,setCostNota]=useState("");
   const months=Object.keys(tenant?.payments||{});
   const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
   if(!tenant)return null;
   const handleAddCost=()=>{
     if(!costAmt||!costMonth)return;
     const icon=icons[costType]||"📋";const name=costType.replace(/^[^\s]+\s/,"");
-    onAddCost(tenant.id,{icon,name,month:costMonth,amount:parseFloat(costAmt),tipo:costTipo});setCostAmt("");
+    onAddCost(tenant.id,{icon,name,month:costMonth,amount:parseFloat(costAmt),tipo:costTipo,nota:costNota});setCostAmt("");setCostNota("");
   };
   return(
     <div className="modal">
@@ -1050,6 +1062,20 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
       <div className="serif" style={{fontSize:16,marginBottom:12}}>{t.paymentHistory}</div>
       {months.map(m=>{const p=(tenant.payments||{})[m];return(<div key={m} className="cr"><div className="cn">{m}</div><div style={{display:"flex",alignItems:"center",gap:8}}><span className="badge" style={p.paid?{background:"#E6F4ED",color:"#4A9B6F"}:{background:"#FDECEA",color:"#D94F3D"}}>{p.paid?`✓ ${p.date}`:"✗ Pendiente"}</span><button className="btn btn-o btn-sm" onClick={()=>onToggle(tenant.id,m)}>{p.paid?t.revert:t.markPaid}</button></div></div>);})}
       <hr/>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>⚡ Costes registrados</div>
+      {(tenant.costs||[]).length===0
+        ?<p style={{fontSize:13,color:"var(--warm)",marginBottom:12}}>{t.noCosts}</p>
+        :(tenant.costs||[]).map(c=>(
+          <div key={c.id} style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14}}>{c.icon} {c.name} · <strong>{c.amount}€</strong></div>
+              <div style={{fontSize:12,color:"var(--warm)"}}>{c.month} · {c.tipo==="inversion"?"🏗️ Inversión (tuya)":"💸 Gasto"}</div>
+              {c.nota&&<div style={{fontSize:12,color:"#555",marginTop:2}}>📝 {c.nota}</div>}
+            </div>
+            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)",marginLeft:8,flexShrink:0}} onClick={()=>onDeleteCost(tenant.id,c.id)}>🗑️</button>
+          </div>
+        ))}
+      <div style={{marginBottom:16}}/>
       <div className="serif" style={{fontSize:16,marginBottom:12}}>➕ {t.addCost}</div>
       <div className="fg">
         <label>Tipo</label>
@@ -1067,6 +1093,7 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
           {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
         </select>
       </div>
+      <div className="fg"><label>📝 Nota (opcional)</label><textarea value={costNota} onChange={e=>setCostNota(e.target.value)} placeholder="Ej: Cambio de caldera..."/></div>
       <button className="btn btn-p" onClick={handleAddCost}>➕ {t.addCost}</button>
     </div>
   );
@@ -1139,12 +1166,13 @@ function AddCostModal({t,tenants,onSave,onClose}){
   const [tipo,setTipo]=useState("gasto"); // gasto | inversion
   const [amount,setAmount]=useState("");
   const [month,setMonth]=useState(currentMonth);
+  const [nota,setNota]=useState("");
   const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
   const handle=()=>{
     if(!amount)return;
     const icon=icons[costType]||"📋";
     const name=costType.replace(/^\S+\s/,"");
-    onSave(tid,{icon,name,month,amount:parseFloat(amount),tipo});
+    onSave(tid,{icon,name,month,amount:parseFloat(amount),tipo,nota});
   };
   return(
     <div className="modal">
@@ -1167,6 +1195,7 @@ function AddCostModal({t,tenants,onSave,onClose}){
           {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
         </select>
       </div>
+      <div className="fg"><label>📝 Nota (opcional)</label><textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Cambio de caldera, pintura piso..."/></div>
       <button className="btn btn-p btn-full" onClick={handle}>{t.save}</button>
     </div>
   );
