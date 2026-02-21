@@ -648,67 +648,137 @@ function Tenants({t,tenants,onSelect,onNew,onEdit}){
 }
 
 function Finances({t,tenants,onToggle,onAddCost}){
-  const months=["Enero 2025","Febrero 2025","Marzo 2025"];
+  const now=new Date();
+  const startYear=2024; const endYear=startYear+15;
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const allMonths=[];
+  for(let y=startYear;y<endYear;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
 
-  // Build chart data per month
-  const chartData=months.map(m=>{
+  const [selYear,setSelYear]=useState(now.getFullYear());
+  const [tab,setTab]=useState("pagos"); // pagos | gastos | graficos
+  const years=Array.from({length:15},(_,i)=>startYear+i);
+  const monthsOfYear=monthNames.map(m=>`${m} ${selYear}`);
+
+  // Chart data for selected year
+  const chartData=monthsOfYear.map(m=>{
     const ingresos=tenants.filter(ten=>(ten.payments||{})[m]?.paid).reduce((s,ten)=>s+(ten.rent||0),0);
-    const gastos=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m).reduce((ss,c)=>ss+(c.amount||0),0),0);
-    const profit=ingresos-gastos;
-    return{name:m.split(" ")[0],Ingresos:ingresos,Gastos:gastos,Profit:profit};
+    const gastos=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const inversion=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const profit=ingresos-gastos-inversion;
+    return{name:m.split(" ")[0].slice(0,3),Ingresos:ingresos,Gastos:gastos,Inversión:inversion,Profit:profit};
   });
+
+  // Yearly totals
+  const totalIngresos=chartData.reduce((s,d)=>s+d.Ingresos,0);
+  const totalGastos=chartData.reduce((s,d)=>s+d.Gastos,0);
+  const totalInversion=chartData.reduce((s,d)=>s+d.Inversión,0);
+  const totalProfit=totalIngresos-totalGastos-totalInversion;
 
   return(
     <div>
-      <div className="page-hd"><h2>{t.finances}</h2></div>
-      <div className="card">
-        <div className="card-title">📊 Resumen financiero</div>
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={chartData} margin={{top:8,right:16,left:0,bottom:0}}>
-            <XAxis dataKey="name" tick={{fontSize:12}}/>
-            <YAxis tick={{fontSize:12}} unit="€"/>
-            <Tooltip formatter={v=>v+"€"}/>
-            <Legend/>
-            <Bar dataKey="Ingresos" fill="#7A9E7E" radius={[6,6,0,0]}/>
-            <Bar dataKey="Gastos" fill="#D94F3D" radius={[6,6,0,0]}/>
-            <Bar dataKey="Profit" fill="#C4622D" radius={[6,6,0,0]}/>
-          </BarChart>
-        </ResponsiveContainer>
-        <div style={{display:"flex",gap:16,marginTop:16,flexWrap:"wrap"}}>
-          {chartData.map(d=>(
-            <div key={d.name} style={{flex:1,minWidth:100,background:"var(--cream)",borderRadius:12,padding:"12px 16px"}}>
-              <div style={{fontSize:12,color:"var(--warm)",marginBottom:4}}>{d.name}</div>
-              <div style={{fontSize:13}}>🟢 {d.Ingresos}€ · 🔴 {d.Gastos}€ · <strong>{d.Profit>=0?"✅":"⚠️"} {d.Profit}€</strong></div>
-            </div>
-          ))}
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
+        <h2>{t.finances}</h2>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <select className="status-sel" style={{padding:"8px 12px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
+            {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
         </div>
       </div>
-      <div className="card">
-        <div className="card-title">💶 {t.paymentHistory}</div>
-        <div className="tbl-wrap">
-          <table>
-            <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{months.map(m=><th key={m}>{m}</th>)}</tr></thead>
-            <tbody>
-              {tenants.map(ten=>(
-                <tr key={ten.id}>
-                  <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
-                  {months.map(m=>{const p=(ten.payments||{})[m];return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?`✓ ${p.date}`:"✗ Pend."}</span></td>);})}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
+        {["pagos","gastos","graficos"].map(tb=>(
+          <button key={tb} className={`chat-tab${tab===tb?" active":""}`} onClick={()=>setTab(tb)}>
+            {tb==="pagos"?"💶 Pagos":tb==="gastos"?"⚡ Gastos":"📊 Gráficos"}
+          </button>
+        ))}
       </div>
-      <div className="card">
-        <div className="card-title">⚡ {t.costBreakdown}</div>
-        <div className="tbl-wrap">
-          <table>
-            <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>{t.month}</th><th>{t.amount}</th></tr></thead>
-            <tbody>{tenants.flatMap(ten=>(ten.costs||[]).map(c=>(<tr key={c.id}><td>{ten.name}</td><td>{c.icon} {c.name}</td><td>{c.month}</td><td>{c.amount}€</td></tr>)))}</tbody>
-          </table>
-        </div>
-        <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+
+      {/* RESUMEN ANUAL */}
+      <div className="stats" style={{marginBottom:20}}>
+        <div className="stat sl"><div className="lbl">Ingresos {selYear}</div><div className="val">{totalIngresos}€</div></div>
+        <div className="stat rl"><div className="lbl">Gastos {selYear}</div><div className="val">{totalGastos}€</div></div>
+        <div className="stat gl"><div className="lbl">Inversión {selYear}</div><div className="val">{totalInversion}€</div></div>
+        <div className="stat tl"><div className="lbl">Profit {selYear}</div><div className="val" style={{color:totalProfit>=0?"var(--green)":"var(--red)"}}>{totalProfit}€</div></div>
       </div>
+
+      {/* TAB PAGOS */}
+      {tab==="pagos"&&(
+        <div className="card">
+          <div className="card-title">💶 {t.paymentHistory} · {selYear}</div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
+              <tbody>
+                {tenants.map(ten=>(
+                  <tr key={ten.id}>
+                    <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
+                    {monthsOfYear.map(m=>{
+                      const p=(ten.payments||{})[m];
+                      return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB GASTOS */}
+      {tab==="gastos"&&(
+        <div className="card">
+          <div className="card-title">⚡ {t.costBreakdown} · {selYear}</div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th></tr></thead>
+              <tbody>
+                {tenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>(
+                  <tr key={c.id}>
+                    <td>{ten.name}</td>
+                    <td>{c.icon} {c.name}</td>
+                    <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>
+                      {c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}
+                    </span></td>
+                    <td>{c.month}</td>
+                    <td>{c.amount}€</td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+        </div>
+      )}
+
+      {/* TAB GRAFICOS */}
+      {tab==="graficos"&&(
+        <div className="card">
+          <div className="card-title">📊 Gráfico anual · {selYear}</div>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={chartData} margin={{top:8,right:8,left:0,bottom:0}}>
+              <XAxis dataKey="name" tick={{fontSize:11}}/>
+              <YAxis tick={{fontSize:11}} unit="€"/>
+              <Tooltip formatter={v=>v+"€"}/>
+              <Legend/>
+              <Bar dataKey="Ingresos" fill="#7A9E7E" radius={[4,4,0,0]}/>
+              <Bar dataKey="Gastos" fill="#D94F3D" radius={[4,4,0,0]}/>
+              <Bar dataKey="Inversión" fill="#4F46E5" radius={[4,4,0,0]}/>
+              <Bar dataKey="Profit" fill="#C4622D" radius={[4,4,0,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+          <div style={{marginTop:16,display:"flex",flexDirection:"column",gap:8}}>
+            {chartData.filter(d=>d.Ingresos>0||d.Gastos>0||d.Inversión>0).map(d=>(
+              <div key={d.name} style={{display:"flex",justifyContent:"space-between",padding:"8px 12px",background:"var(--cream)",borderRadius:10,fontSize:13}}>
+                <span style={{fontWeight:600,width:40}}>{d.name}</span>
+                <span style={{color:"var(--green)"}}>🟢 {d.Ingresos}€</span>
+                <span style={{color:"var(--red)"}}>🔴 {d.Gastos}€</span>
+                <span style={{color:"#4F46E5"}}>🏗️ {d.Inversión}€</span>
+                <span style={{fontWeight:600,color:d.Profit>=0?"var(--green)":"var(--red)"}}>{d.Profit>=0?"✅":"⚠️"} {d.Profit}€</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -937,16 +1007,24 @@ function TenantMaintenance({t,profile,onSend}){
 }
 
 function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
+  const now=new Date();
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const startYear=2024;
+  const allMonths=[];
+  for(let y=startYear;y<startYear+15;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
+  const currentMonth=`${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+
   const [costType,setCostType]=useState("💡 Electricidad");
+  const [costTipo,setCostTipo]=useState("gasto");
   const [costAmt,setCostAmt]=useState("");
-  const [costMonth,setCostMonth]=useState("Marzo 2025");
+  const [costMonth,setCostMonth]=useState(currentMonth);
   const months=Object.keys(tenant?.payments||{});
-  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","Otro":"📋"};
+  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
   if(!tenant)return null;
   const handleAddCost=()=>{
     if(!costAmt||!costMonth)return;
-    const icon=icons[costType]||"📋";const name=costType.replace(/^\S+\s/,"");
-    onAddCost(tenant.id,{icon,name,month:costMonth,amount:parseFloat(costAmt)});setCostAmt("");
+    const icon=icons[costType]||"📋";const name=costType.replace(/^[^\s]+\s/,"");
+    onAddCost(tenant.id,{icon,name,month:costMonth,amount:parseFloat(costAmt),tipo:costTipo});setCostAmt("");
   };
   return(
     <div className="modal">
@@ -973,11 +1051,22 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
       {months.map(m=>{const p=(tenant.payments||{})[m];return(<div key={m} className="cr"><div className="cn">{m}</div><div style={{display:"flex",alignItems:"center",gap:8}}><span className="badge" style={p.paid?{background:"#E6F4ED",color:"#4A9B6F"}:{background:"#FDECEA",color:"#D94F3D"}}>{p.paid?`✓ ${p.date}`:"✗ Pendiente"}</span><button className="btn btn-o btn-sm" onClick={()=>onToggle(tenant.id,m)}>{p.paid?t.revert:t.markPaid}</button></div></div>);})}
       <hr/>
       <div className="serif" style={{fontSize:16,marginBottom:12}}>➕ {t.addCost}</div>
+      <div className="fg">
+        <label>Tipo</label>
+        <div style={{display:"flex",gap:8,marginTop:4}}>
+          <button className={`btn btn-sm ${costTipo==="gasto"?"btn-p":"btn-o"}`} onClick={()=>setCostTipo("gasto")}>💸 Gasto</button>
+          <button className={`btn btn-sm ${costTipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setCostTipo("inversion")}>🏗️ Inversión (mía)</button>
+        </div>
+      </div>
       <div className="gr2">
-        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
         <div className="fg"><label>{t.amount}</label><input type="number" value={costAmt} onChange={e=>setCostAmt(e.target.value)} placeholder="0"/></div>
       </div>
-      <div className="fg"><label>{t.month}</label><input value={costMonth} onChange={e=>setCostMonth(e.target.value)}/></div>
+      <div className="fg"><label>{t.month}</label>
+        <select value={costMonth} onChange={e=>setCostMonth(e.target.value)}>
+          {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
       <button className="btn btn-p" onClick={handleAddCost}>➕ {t.addCost}</button>
     </div>
   );
@@ -1038,20 +1127,46 @@ function NewTenantModal({t,onClose,onSave}){
 }
 
 function AddCostModal({t,tenants,onSave,onClose}){
+  const now=new Date();
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const startYear=2024; const endYear=startYear+15;
+  const allMonths=[];
+  for(let y=startYear;y<endYear;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
+  const currentMonth=`${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+
   const [tid,setTid]=useState(tenants[0]?.id||"");
   const [costType,setCostType]=useState("💡 Electricidad");
-  const [amount,setAmount]=useState("");const [month,setMonth]=useState("Marzo 2025");
-  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","Otro":"📋"};
-  const handle=()=>{if(!amount)return;const icon=icons[costType]||"📋";const name=costType.replace(/^\S+\s/,"");onSave(tid,{icon,name,month,amount:parseFloat(amount)});};
+  const [tipo,setTipo]=useState("gasto"); // gasto | inversion
+  const [amount,setAmount]=useState("");
+  const [month,setMonth]=useState(currentMonth);
+  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
+  const handle=()=>{
+    if(!amount)return;
+    const icon=icons[costType]||"📋";
+    const name=costType.replace(/^\S+\s/,"");
+    onSave(tid,{icon,name,month,amount:parseFloat(amount),tipo});
+  };
   return(
     <div className="modal">
       <div className="modal-hd"><h3>➕ {t.addCost}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
       <div className="fg"><label>{t.tenant}</label><select value={tid} onChange={e=>setTid(e.target.value)}>{tenants.map(ten=><option key={ten.id} value={ten.id}>{ten.name} ({ten.unit})</option>)}</select></div>
+      <div className="fg">
+        <label>Tipo</label>
+        <div style={{display:"flex",gap:10,marginTop:4}}>
+          <button className={`btn btn-sm ${tipo==="gasto"?"btn-p":"btn-o"}`} onClick={()=>setTipo("gasto")}>💸 Gasto</button>
+          <button className={`btn btn-sm ${tipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setTipo("inversion")}>🏗️ Inversión (mía)</button>
+        </div>
+        {tipo==="inversion"&&<p style={{fontSize:12,color:"var(--warm)",marginTop:6}}>Esta inversión la asumes tú, no se carga al inquilino</p>}
+      </div>
       <div className="gr2">
-        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
         <div className="fg"><label>{t.amount}</label><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"/></div>
       </div>
-      <div className="fg"><label>{t.month}</label><input value={month} onChange={e=>setMonth(e.target.value)}/></div>
+      <div className="fg"><label>{t.month}</label>
+        <select value={month} onChange={e=>setMonth(e.target.value)}>
+          {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
       <button className="btn btn-p btn-full" onClick={handle}>{t.save}</button>
     </div>
   );
