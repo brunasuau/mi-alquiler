@@ -9,6 +9,7 @@ import {
   doc, setDoc, getDoc, collection, query, where,
   onSnapshot, addDoc, orderBy, serverTimestamp, updateDoc
 } from "firebase/firestore";
+import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 
 const OWNER_EMAIL = "bertasuau@gmail.com";
@@ -56,6 +57,63 @@ function generateReceipt({ tenantName, unit, month, date }) {
   d.save(`Rebut_${tenantName.replace(/ /g,"_")}_${month.replace(/ /g,"_")}.pdf`);
 }
 
+function generateAnnualExcel(tenants, year) {
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const months=monthNames.map(m=>`${m} ${year}`);
+  const wb=XLSX.utils.book_new();
+
+  // ── SHEET 1: RESUMEN ANUAL ──
+  const resumen=[["RESUMEN ANUAL "+year,"","",""],["","","",""],
+    ["Mes","Ingresos (€)","Gastos (€)","Inversiones (€)","Profit (€)"]];
+  let totI=0,totG=0,totInv=0;
+  months.forEach(m=>{
+    const ing=tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((s,t)=>s+(t.rent||0),0);
+    const gas=tenants.reduce((s,t)=>s+(t.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const inv=tenants.reduce((s,t)=>s+(t.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    totI+=ing;totG+=gas;totInv+=inv;
+    resumen.push([m,ing,gas,inv,ing-gas-inv]);
+  });
+  resumen.push(["","","","",""]);
+  resumen.push(["TOTAL",totI,totG,totInv,totI-totG-totInv]);
+  const ws1=XLSX.utils.aoa_to_sheet(resumen);
+  ws1["!cols"]=[{wch:20},{wch:15},{wch:15},{wch:16},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,ws1,"Resumen");
+
+  // ── SHEET 2: PAGOS ──
+  const pagosData=[["PAGOS INQUILINOS "+year],["Inquilino","Piso","Alquiler/mes",...months]];
+  tenants.forEach(ten=>{
+    const row=[ten.name,ten.unit,ten.rent+"€"];
+    months.forEach(m=>{const p=(ten.payments||{})[m];row.push(p?.paid?"✓ "+p.date:"✗ Pendiente");});
+    pagosData.push(row);
+  });
+  const ws2=XLSX.utils.aoa_to_sheet(pagosData);
+  ws2["!cols"]=[{wch:20},{wch:15},{wch:14},...months.map(()=>({wch:14}))];
+  XLSX.utils.book_append_sheet(wb,ws2,"Pagos");
+
+  // ── SHEET 3: GASTOS E INVERSIONES ──
+  const gastosData=[["GASTOS E INVERSIONES "+year],["Inquilino","Concepto","Tipo","Mes","Importe (€)","Nota"]];
+  tenants.forEach(ten=>{
+    (ten.costs||[]).filter(c=>c.month?.includes(String(year))).forEach(c=>{
+      gastosData.push([ten.name,c.icon+" "+c.name,c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto",c.month,c.amount,c.nota||""]);
+    });
+  });
+  const ws3=XLSX.utils.aoa_to_sheet(gastosData);
+  ws3["!cols"]=[{wch:20},{wch:20},{wch:14},{wch:16},{wch:12},{wch:30}];
+  XLSX.utils.book_append_sheet(wb,ws3,"Gastos");
+
+  // ── SHEET 4: INQUILINOS ──
+  const tenantsData=[["INQUILINOS "+year],["Nombre","Piso","Teléfono","Email","Alquiler","Inicio contrato","Fin contrato"]];
+  tenants.forEach(ten=>{
+    tenantsData.push([ten.name,ten.unit,ten.phone||"",ten.email||"",ten.rent+"€",ten.contractStart||"",ten.contractEnd||""]);
+  });
+  const ws4=XLSX.utils.aoa_to_sheet(tenantsData);
+  ws4["!cols"]=[{wch:22},{wch:15},{wch:14},{wch:26},{wch:12},{wch:16},{wch:16}];
+  XLSX.utils.book_append_sheet(wb,ws4,"Inquilinos");
+
+  XLSX.writeFile(wb,`MiAlquiler_Resumen_${year}.xlsx`);
+  return {year, filename:`MiAlquiler_Resumen_${year}.xlsx`, date:new Date().toLocaleDateString("es-ES"), totI, totG, totInv, profit:totI-totG-totInv};
+}
+
 function checkIPC(tenants) {
   const now=new Date(); const alerts=[];
   tenants.forEach(ten=>{
@@ -94,6 +152,7 @@ const T={
     joinedSince:"Inquilino desde",totalCosts:"Total costes",monthlyRent:"Alquiler fijo",
     incomeMonth:"Ingreso mensual",paidCount:"Pagos recibidos",activeTenants:"Inquilinos activos",
     pendingMaint:"Mantenimiento pendiente",recentIncidents:"Incidencias recientes",hello:"Hola",
+    documents:"Documentos",generateExcel:"Generar Excel anual",downloadDoc:"Descargar",noDocuments:"No hay documentos todavía",docGenerated:"Documento generado",
     contractStart:"Inicio contrato",contractEnd:"Fin contrato",editTenant:"Editar inquilino",
     contractAnniversary:"Subida de IPC",notifications:"Notificaciones",
     noNotifications:"Sin notificaciones",contractSigned:"Contrato firmado el",
@@ -116,6 +175,7 @@ const T={
     joinedSince:"Tenant since",totalCosts:"Total costs",monthlyRent:"Fixed rent",
     incomeMonth:"Monthly income",paidCount:"Payments received",activeTenants:"Active tenants",
     pendingMaint:"Pending maintenance",recentIncidents:"Recent issues",hello:"Hello",
+    documents:"Documents",generateExcel:"Generate annual Excel",downloadDoc:"Download",noDocuments:"No documents yet",docGenerated:"Document generated",
     contractStart:"Contract start",contractEnd:"Contract end",editTenant:"Edit tenant",
     contractAnniversary:"IPC Rent Increase",notifications:"Notifications",
     noNotifications:"No notifications",contractSigned:"Contract signed on",
@@ -138,6 +198,7 @@ const T={
     joinedSince:"مستأجر منذ",totalCosts:"إجمالي التكاليف",monthlyRent:"الإيجار الثابت",
     incomeMonth:"الدخل الشهري",paidCount:"المدفوعات المستلمة",activeTenants:"المستأجرون النشطون",
     pendingMaint:"صيانة معلقة",recentIncidents:"البلاغات الأخيرة",hello:"مرحباً",
+    documents:"المستندات",generateExcel:"إنشاء Excel سنوي",downloadDoc:"تحميل",noDocuments:"لا توجد مستندات",docGenerated:"تم إنشاء المستند",
     contractStart:"بداية العقد",contractEnd:"نهاية العقد",editTenant:"تعديل المستأجر",
     contractAnniversary:"زيادة IPC",notifications:"الإشعارات",
     noNotifications:"لا توجد إشعارات",contractSigned:"تم توقيع العقد في",
@@ -346,6 +407,7 @@ export default function App() {
   const [tenants,setTenants]=useState([]);
   const [showNotif,setShowNotif]=useState(false);
   const [sidebarOpen,setSidebarOpen]=useState(true);
+  const [documents,setDocuments]=useState([]);
 
   const t=T[lang||"es"];
   const isOwner=profile?.role==="owner";
@@ -367,6 +429,17 @@ export default function App() {
     return unsub;
   },[isOwner]);
 
+  useEffect(()=>{
+    if(!isOwner||!user)return;
+    const q=query(collection(db,"documents",user.uid,"files"),orderBy("createdAt","desc"));
+    const unsub=onSnapshot(q,snap=>setDocuments(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    return unsub;
+  },[isOwner,user]);
+
+  async function saveDocument(docInfo){
+    await addDoc(collection(db,"documents",user.uid,"files"),{...docInfo,createdAt:serverTimestamp()});
+  }
+
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
   const persist=async(ref,data)=>{setSaving(true);await updateDoc(ref,data);setSaving(false);};
 
@@ -381,6 +454,7 @@ export default function App() {
     {id:"maintenance",icon:"🔧",label:t.maintenance},
     {id:"calendar",icon:"📅",label:t.calendar},
     {id:"messages",icon:"💬",label:t.messages},
+    {id:"documentos",icon:"📁",label:t.documents},
   ];
   const tenantNav=[
     {id:"t-home",icon:"🏠",label:t.myHome},
@@ -453,6 +527,7 @@ export default function App() {
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
+      if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -1197,6 +1272,85 @@ function AddCostModal({t,tenants,onSave,onClose}){
       </div>
       <div className="fg"><label>📝 Nota (opcional)</label><textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Cambio de caldera, pintura piso..."/></div>
       <button className="btn btn-p btn-full" onClick={handle}>{t.save}</button>
+    </div>
+  );
+}
+
+function DocumentsPage({t,tenants,documents,onGenerate}){
+  const startYear=2024; const endYear=startYear+15;
+  const years=Array.from({length:15},(_,i)=>startYear+i);
+  const now=new Date();
+  const [selYear,setSelYear]=useState(now.getFullYear());
+  const [generating,setGenerating]=useState(false);
+
+  const handle=async()=>{
+    setGenerating(true);
+    await onGenerate(selYear);
+    setGenerating(false);
+  };
+
+  // Summary for selected year
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const months=monthNames.map(m=>`${m} ${selYear}`);
+  const totI=months.reduce((s,m)=>s+tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((ss,t)=>ss+(t.rent||0),0),0);
+  const totG=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
+  const totInv=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
+  const profit=totI-totG-totInv;
+
+  return(
+    <div>
+      <div className="page-hd"><h2>📁 {t.documents}</h2><p>Resúmenes anuales en Excel</p></div>
+
+      <div className="card">
+        <div className="card-title">📊 {t.generateExcel}</div>
+        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:20}}>
+          <select className="status-sel" style={{padding:"10px 14px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
+            {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+          <button className="btn btn-p" onClick={handle} disabled={generating}>
+            {generating?"⏳ Generando...":"📥 Generar Excel "+selYear}
+          </button>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:8}}>
+          <div style={{background:"#E6F4ED",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INGRESOS {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--green)"}}>{totI}€</div>
+          </div>
+          <div style={{background:"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>GASTOS {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--red)"}}>{totG}€</div>
+          </div>
+          <div style={{background:"#EEF2FF",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INVERSIÓN {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#4F46E5"}}>{totInv}€</div>
+          </div>
+          <div style={{background:profit>=0?"#E6F4ED":"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>PROFIT {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:profit>=0?"var(--green)":"var(--red)"}}>{profit}€</div>
+          </div>
+        </div>
+        <p style={{fontSize:12,color:"var(--warm)",marginTop:8}}>El Excel incluye 4 hojas: Resumen, Pagos, Gastos e Inquilinos</p>
+      </div>
+
+      <div className="card">
+        <div className="card-title">🗂️ Documentos generados</div>
+        {documents.length===0
+          ?<p style={{color:"var(--warm)",fontSize:14}}>{t.noDocuments}</p>
+          :documents.map(doc=>(
+            <div key={doc.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 0",borderBottom:"1px solid var(--border)"}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:15}}>📊 MiAlquiler_Resumen_{doc.year}.xlsx</div>
+                <div style={{fontSize:12,color:"var(--warm)",marginTop:3}}>
+                  Generado el {doc.date} · Ingresos: {doc.totI}€ · Gastos: {doc.totG}€ · Profit: <span style={{color:doc.profit>=0?"var(--green)":"var(--red)",fontWeight:600}}>{doc.profit}€</span>
+                </div>
+              </div>
+              <button className="btn btn-o btn-sm" onClick={()=>generateAnnualExcel(tenants,doc.year)}>
+                📥 {t.downloadDoc}
+              </button>
+            </div>
+          ))}
+      </div>
     </div>
   );
 }
