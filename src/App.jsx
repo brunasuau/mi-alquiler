@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, LineChart, Line } from "recharts";
-import { auth, db } from "./firebase";
+import { auth, db, tenantAuth } from "./firebase";
 import {
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
   signOut, onAuthStateChanged,
@@ -183,7 +183,7 @@ function generateContractDocx(data) {
   addText([{text:"Ambas partes se reconocen capacidad legal suficiente para formalizar el presente contrato."}]);
   space();
   heading("EXPONEN");
-  addText([{text:"1. El ARRENDADOR es propietario del local en "},{text:"Carrer Montserrat, nº 14, Calafell (Tarragona)",bold:true},{text:"."}]);
+  addText([{text:"1. El ARRENDADOR es propietario del local en "},{text:"Carrer del Pou 61, Carrer Montserrat 14, Carrer Barceloneta, Carrer torredembarra",bold:true},{text:"."}]);
   addText([{text:"2. Ambas partes desean renovar el arrendamiento bajo las siguientes condiciones."}]);
   space();
   heading("CLÁUSULAS");
@@ -663,15 +663,32 @@ export default function App() {
 
   async function createTenant({name,unit,phone,rent,email,password,contractStart,contractEnd}){
     try{
-      const cred=await createUserWithEmailAndPassword(auth,email,password);
+      // ✅ crear usuario en Auth secundario: NO cambia la sesión del propietario
+      const cred = await createUserWithEmailAndPassword(tenantAuth, email, password);
+
+      // ✅ crear/guardar el perfil del inquilino en Firestore
       await setDoc(doc(db,"users",cred.user.uid),{
-        name,unit,phone,rent:parseFloat(rent),email,role:"tenant",joined:today(),
-        contractStart:contractStart||"",contractEnd:contractEnd||"",
-        payments:{},costs:[],maintenance:[],lang:"es"
+        name,
+        unit,
+        phone,
+        rent: parseFloat(rent),
+        email,
+        role: "tenant",
+        joined: today(),
+        contractStart: contractStart || "",
+        contractEnd: contractEnd || "",
+        payments: {},
+        costs: [],
+        maintenance: [],
+        lang: "es"
       });
-      await signInWithEmailAndPassword(auth,OWNER_EMAIL,window._ownerPass||"");
-      setModal(null);showToast("✅ Inquilino creado");
-    }catch(e){showToast("❌ Error: "+e.message);}
+
+      setModal(null);
+      showToast("✅ Inquilino creado");
+    } catch(e) {
+      showToast("❌ Error: " + e.message);
+      console.warn("createTenant error:", e);
+    }
   }
 
   async function editTenant(tenantId,data){
@@ -703,30 +720,50 @@ export default function App() {
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
-    if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
-      const year=data.signYear;
-      // 1. Create tenant Firebase Auth account
-      let tenantUid=null;
-      try{
-        const {createUserWithEmailAndPassword:cu}=await import("firebase/auth");
-        const cred=await cu(auth,data.email,data.password);
-        tenantUid=cred.user.uid;
-        // 2. Save tenant profile in Firestore
-        await setDoc(doc(db,"users",tenantUid),{
-          name:data.tenantName,unit:data.unit,phone:data.phone||"",
-          rent:parseFloat(data.rent),email:data.email,role:"tenant",
-          joined:today(),contractStart:data.contractStartISO||"",
-          contractEnd:data.contractEndISO||"",
-          payments:{},costs:[],maintenance:[],lang:"es"
-        });
-        // 3. Re-login as owner
-        const {signInWithEmailAndPassword:si}=await import("firebase/auth");
-        await si(auth,OWNER_EMAIL,window._ownerPass||"");
-      }catch(e){showToast("⚠️ Error cuenta: "+e.message);}
-      // 4. Save contract record
-      await saveContract({...data,year,date:today(),tenantUid});
-      showToast("✅ Inquilino creado y contrato guardado");
-    }}/>;
+    if(modal.type==="new-contract")return(
+      <NewContractModal
+        t={t}
+        onClose={()=>setModal(null)}
+        onSave={async(data)=>{
+          const year = data.signYear;
+
+          let tenantUid = null;
+
+          // 1) Crear usuario del inquilino SIN tocar la sesión del propietario
+          try {
+            const cred = await createUserWithEmailAndPassword(tenantAuth, data.email, data.password);
+            tenantUid = cred.user.uid;
+
+            // 2) Guardar perfil del inquilino en Firestore
+            await setDoc(doc(db,"users",tenantUid),{
+              name: data.tenantName,
+              unit: data.unit,
+              phone: data.phone || "",
+              rent: parseFloat(data.rent),
+              email: data.email,
+              role: "tenant",
+              joined: today(),
+              contractStart: data.contractStartISO || "",
+              contractEnd: data.contractEndISO || "",
+              payments: {},
+              costs: [],
+              maintenance: [],
+              lang: "es"
+            });
+
+          } catch (e) {
+            showToast("⚠️ Error cuenta: " + e.message);
+            console.warn("Tenant creation error:", e);
+            // Si falla crear el usuario, igual guardamos el contrato sin tenantUid (opcional)
+          }
+
+          // 3) Guardar contrato (con tenantUid si existe)
+          await saveContract({...data, year, date: today(), tenantUid});
+
+          showToast("✅ Inquilino creado y contrato guardado");
+        }}
+      />
+    );
     return null;
   };
 
