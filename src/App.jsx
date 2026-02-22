@@ -569,7 +569,34 @@ export default function App() {
   },[isOwner,user]);
 
   async function saveContract(contractInfo){
-    await addDoc(collection(db,"contracts",user.uid,"files"),{...contractInfo,createdAt:serverTimestamp()});
+    const docRef = await addDoc(collection(db,"contracts",user.uid,"files"),{...contractInfo,createdAt:serverTimestamp()});
+    // If contract includes a tenant UID, ensure the tenant user doc is created/updated
+    if(contractInfo?.tenantUid){
+      const tenantRef = doc(db,"users",contractInfo.tenantUid);
+      const tenantData = {
+        name: contractInfo.tenantName,
+        unit: contractInfo.unit,
+        phone: contractInfo.phone||"",
+        rent: parseFloat(contractInfo.rent||0),
+        email: contractInfo.email||"",
+        role: "tenant",
+        contractStart: contractInfo.contractStartISO||contractInfo.contractStart||"",
+        contractEnd: contractInfo.contractEndISO||contractInfo.contractEnd||"",
+        joined: today(),
+        payments: {},
+        costs: [],
+        maintenance: [],
+        lang: "es"
+      };
+      // Use setDoc with merge to create or update the tenant record
+      try{await setDoc(tenantRef,tenantData,{merge:true});}catch(e){console.warn("saveContract: setDoc error",e);}
+      // Update local state immediately so the Tenants view shows the new/updated tenant without waiting for snapshot
+      setTenants(prev=>{
+        const others = (prev||[]).filter(p=>p.id!==contractInfo.tenantUid);
+        return [{id:contractInfo.tenantUid,...tenantData}, ...others];
+      });
+    }
+    return docRef;
   }
 
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
