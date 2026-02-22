@@ -627,14 +627,16 @@ export default function App() {
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
     if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
-      // 1. Generate and download docx
-      const filename=await generateContractDocx(data);
-      // 2. Create tenant in Firebase
-      await createTenant({name:data.tenantName,unit:data.unit,phone:data.phone,rent:data.rent,email:data.email,password:data.password,contractStart:data.contractStartISO,contractEnd:data.contractEndISO});
-      // 3. Save contract record
+      // 1. Generate and download docx IMMEDIATELY
+      const filename = await generateContractDocx(data);
+      setModal(null);
+      showToast("📄 Contrato descargado — creando inquilino...");
+      // 2. Create tenant + save contract in background
       const year=data.signYear;
-      await saveContract({...data,filename,year,date:today()});
-      showToast("✅ "+t.tenantCreated);
+      createTenant({name:data.tenantName,unit:data.unit,phone:data.phone,rent:data.rent,email:data.email,password:data.password,contractStart:data.contractStartISO,contractEnd:data.contractEndISO})
+        .then(()=>saveContract({...data,filename,year,date:today()}))
+        .then(()=>showToast("✅ "+t.tenantCreated))
+        .catch(e=>showToast("⚠️ Error: "+e.message));
     }}/>;
     return null;
   };
@@ -1510,9 +1512,9 @@ function NewContractModal({t,onClose,onSave}){
   const handleSave=async()=>{
     if(!tenantSigned){alert("El inquilino debe aceptar el contrato");return;}
     setSaving(true);
-    await onSave({...form, contractStartISO:toISO(form.startDay,form.startMonth,form.startYear), contractEndISO:toISO(form.endDay,form.endMonth,form.endYear)});
+    // Call onSave — modal closes inside onSave (before tenant creation finishes)
+    onSave({...form, contractStartISO:toISO(form.startDay,form.startMonth,form.startYear), contractEndISO:toISO(form.endDay,form.endMonth,form.endYear)});
     setSaving(false);
-    onClose();
   };
 
   return(
@@ -1606,7 +1608,7 @@ function NewContractModal({t,onClose,onSave}){
           <div style={{display:"flex",gap:10}}>
             <button className="btn btn-o" onClick={()=>setStep(1)}>← Volver</button>
             <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={!tenantSigned||saving}>
-              {saving?"⏳ Creando...":"✅ Firmar y crear contrato"}
+              {saving?"📄 Generando contrato...":"✅ Firmar y descargar contrato"}
             </button>
           </div>
         </>
