@@ -10,6 +10,7 @@ import {
   onSnapshot, addDoc, orderBy, serverTimestamp, updateDoc
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
+import { Document as DocxDocument, Packer, Paragraph, TextRun, AlignmentType } from "docx";
 import { jsPDF } from "jspdf";
 
 const OWNER_EMAIL = "bertasuau@gmail.com";
@@ -114,6 +115,66 @@ function generateAnnualExcel(tenants, year) {
   return {year, filename:`MiAlquiler_Resumen_${year}.xlsx`, date:new Date().toLocaleDateString("es-ES"), totI, totG, totInv, profit:totI-totG-totInv};
 }
 
+async function generateContractDocx(data) {
+  const { unit, tenantName, tenantDni, tenantAddress, signDay, signMonth, signYear,
+          startDay, startMonth, startYear, endDay, endMonth, endYear, rent } = data;
+  const b = (text, size=22) => new TextRun({ text, bold:true, size, font:"Arial" });
+  const n = (text, size=22) => new TextRun({ text, size, font:"Arial" });
+  const br = () => new Paragraph({ children:[] });
+  const p = (children, align=AlignmentType.JUSTIFIED) => new Paragraph({ children, alignment:align, spacing:{after:160} });
+  const doc = new DocxDocument({
+    styles:{ default:{ document:{ run:{ font:"Arial", size:22 } } } },
+    sections:[{ properties:{ page:{ size:{width:11906,height:16838}, margin:{top:1440,right:1440,bottom:1440,left:1440} } },
+    children:[
+      p([b(`CONTRATO DE ARRENDAMIENTO DE ${unit.toUpperCase()}`,28)], AlignmentType.CENTER),
+      br(),
+      p([n(`En Calafell, a ${signDay} de ${signMonth} de ${signYear}.`)]),
+      br(),
+      p([b("REUNIDOS")]),
+      p([n("De una parte, D./Dña. "),b("JOANA SOLÉ SANTACANA"),n(", mayor de edad, con DNI nº "),b("39618190T"),n(", y domicilio en "),b("PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª"),n(", en adelante "),b("EL ARRENDADOR"),n(".")]),
+      p([n("Y de otra parte, D./Dña. "),b(tenantName),n(", mayor de edad, con DNI nº "),b(tenantDni),n(", y domicilio en "),b(tenantAddress),n(", en adelante "),b("EL ARRENDATARIO"),n(".")]),
+      p([n("Ambas partes se reconocen capacidad legal suficiente para formalizar el presente contrato de arrendamiento y, a tal efecto,")]),
+      br(),
+      p([b("EXPONEN")]),
+      p([n("1. Que el ARRENDADOR es propietario del local situado en "),b("Carrer Montserrat, nº 14, Calafell (Tarragona)"),n(".")]),
+      p([n("2. Que el ARRENDATARIO ocupa dicho local en virtud de contrato previo, y que ambas partes desean renovar el arrendamiento bajo las siguientes condiciones.")]),
+      p([n("⸻")], AlignmentType.CENTER),
+      p([b("CLÁUSULAS")]),
+      p([b("Primera. Objeto")]),
+      p([n("El ARRENDADOR renueva el arrendamiento a favor del ARRENDATARIO sobre el local situado en "),b("Carrer Montserrat, nº 14, Calafell"),n(", destinado exclusivamente a uso comercial.")]),
+      p([b("Segunda. Duración")]),
+      p([n("La duración del presente contrato será de dos (2) años, comenzando el día "),b(`${startDay} de ${startMonth} de ${startYear}`),n(" y finalizando el "),b(`${endDay} de ${endMonth} de ${endYear}`),n(".")]),
+      p([b("Tercera. Renta")]),
+      p([n("La renta mensual se fija en "),b(`${rent} €`),n(", que el ARRENDATARIO abonará dentro de los cinco primeros días de cada mes mediante transferencia bancaria a la cuenta indicada por el ARRENDADOR.")]),
+      p([b("Cuarta. Actualización de la renta")]),
+      p([n("La renta se actualizará anualmente, aplicando la variación anual del Índice de Precios al Consumo (IPC) publicado por el Instituto Nacional de Estadística correspondiente al mes de la revisión, incrementada en un 1,5% adicional. La primera actualización tendrá lugar a los 12 meses de la firma del presente contrato.")]),
+      p([b("Quinta. Gastos y suministros")]),
+      p([n("Serán de cuenta exclusiva del ARRENDATARIO los gastos de electricidad, agua, y tasa de basuras, así como cualquier otro suministro que se contrate en relación con el local.")]),
+      p([b("Sexta. Fianza")]),
+      p([n("Al tratarse de una renovación del contrato, no se constituye fianza adicional, dado que no existe obligación entre las partes de realizar nuevo depósito.")]),
+      p([b("Séptima. Conservación del local")]),
+      p([n("El ARRENDATARIO se obliga a mantener el local en perfecto estado de conservación, corriendo de su cargo las reparaciones menores derivadas del uso ordinario.")]),
+      p([b("Octava. Cesión y subarriendo")]),
+      p([n("Queda prohibida la cesión del contrato y el subarriendo total o parcial del local sin el consentimiento expreso y por escrito del ARRENDADOR.")]),
+      p([b("Novena. Legislación aplicable")]),
+      p([n("El presente contrato se regirá por lo establecido en el Código Civil, la Ley de Arrendamientos Urbanos vigente, y demás disposiciones aplicables.")]),
+      br(),
+      p([n("Y en prueba de conformidad, firman el presente contrato por duplicado ejemplar y a un solo efecto, en el lugar y fecha arriba indicados.")]),
+      br(),br(),
+      new Paragraph({ children:[b("EL ARRENDADOR"),new TextRun({text:"				",size:22}),b("EL ARRENDATARIO")], tabStops:[{type:"left",position:5000}], spacing:{after:800} }),
+      new Paragraph({ children:[n("Firma: _______________________"),new TextRun({text:"		",size:22}),n("Firma: _______________________")], tabStops:[{type:"left",position:5000}], spacing:{after:400} }),
+      new Paragraph({ children:[new TextRun({text:"Berta Suau",bold:true,italics:true,size:22,font:"Arial"}),new TextRun({text:"				",size:22}),new TextRun({text:tenantName,bold:true,italics:true,size:22,font:"Arial"})], tabStops:[{type:"left",position:5000}] }),
+    ]}]
+  });
+  const buffer = await Packer.toBuffer(doc);
+  const blob = new Blob([buffer], {type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href=url; a.download=`Contrato_${unit.replace(/ /g,"_")}_${tenantName.replace(/ /g,"_")}_${signYear}.docx`;
+  a.click(); URL.revokeObjectURL(url);
+  return a.download;
+}
+
 function checkIPC(tenants) {
   const now=new Date(); const alerts=[];
   tenants.forEach(ten=>{
@@ -153,6 +214,9 @@ const T={
     incomeMonth:"Ingreso mensual",paidCount:"Pagos recibidos",activeTenants:"Inquilinos activos",
     pendingMaint:"Mantenimiento pendiente",recentIncidents:"Incidencias recientes",hello:"Hola",
     documents:"Documentos",generateExcel:"Generar Excel anual",downloadDoc:"Descargar",noDocuments:"No hay documentos todavía",docGenerated:"Documento generado",
+    contracts:"Contratos",newContract:"Nuevo contrato",contractGenerated:"Contrato generado",noContracts:"No hay contratos",tenantCreated:"Inquilino y contrato creados",
+    tenantSignature:"Firma del inquilino",tenantConfirm:"He leído y acepto el contrato de arrendamiento",contractDetails:"Datos del contrato",
+    signDate:"Fecha de firma",startDate:"Inicio del contrato",endDate:"Fin del contrato",dni:"DNI",address:"Domicilio actual",accessPassword:"Contraseña de acceso",
     contractStart:"Inicio contrato",contractEnd:"Fin contrato",editTenant:"Editar inquilino",
     contractAnniversary:"Subida de IPC",notifications:"Notificaciones",
     noNotifications:"Sin notificaciones",contractSigned:"Contrato firmado el",
@@ -176,6 +240,9 @@ const T={
     incomeMonth:"Monthly income",paidCount:"Payments received",activeTenants:"Active tenants",
     pendingMaint:"Pending maintenance",recentIncidents:"Recent issues",hello:"Hello",
     documents:"Documents",generateExcel:"Generate annual Excel",downloadDoc:"Download",noDocuments:"No documents yet",docGenerated:"Document generated",
+    contracts:"Contracts",newContract:"New contract",contractGenerated:"Contract generated",noContracts:"No contracts yet",tenantCreated:"Tenant and contract created",
+    tenantSignature:"Tenant signature",tenantConfirm:"I have read and accept the rental agreement",contractDetails:"Contract details",
+    signDate:"Signing date",startDate:"Contract start",endDate:"Contract end",dni:"ID number",address:"Current address",accessPassword:"Access password",
     contractStart:"Contract start",contractEnd:"Contract end",editTenant:"Edit tenant",
     contractAnniversary:"IPC Rent Increase",notifications:"Notifications",
     noNotifications:"No notifications",contractSigned:"Contract signed on",
@@ -199,6 +266,9 @@ const T={
     incomeMonth:"الدخل الشهري",paidCount:"المدفوعات المستلمة",activeTenants:"المستأجرون النشطون",
     pendingMaint:"صيانة معلقة",recentIncidents:"البلاغات الأخيرة",hello:"مرحباً",
     documents:"المستندات",generateExcel:"إنشاء Excel سنوي",downloadDoc:"تحميل",noDocuments:"لا توجد مستندات",docGenerated:"تم إنشاء المستند",
+    contracts:"العقود",newContract:"عقد جديد",contractGenerated:"تم إنشاء العقد",noContracts:"لا توجد عقود",tenantCreated:"تم إنشاء المستأجر والعقد",
+    tenantSignature:"توقيع المستأجر",tenantConfirm:"لقد قرأت وأوافق على عقد الإيجار",contractDetails:"بيانات العقد",
+    signDate:"تاريخ التوقيع",startDate:"بداية العقد",endDate:"نهاية العقد",dni:"رقم الهوية",address:"العنوان الحالي",accessPassword:"كلمة المرور",
     contractStart:"بداية العقد",contractEnd:"نهاية العقد",editTenant:"تعديل المستأجر",
     contractAnniversary:"زيادة IPC",notifications:"الإشعارات",
     noNotifications:"لا توجد إشعارات",contractSigned:"تم توقيع العقد في",
@@ -408,6 +478,7 @@ export default function App() {
   const [showNotif,setShowNotif]=useState(false);
   const [sidebarOpen,setSidebarOpen]=useState(true);
   const [documents,setDocuments]=useState([]);
+  const [contracts,setContracts]=useState([]);
 
   const t=T[lang||"es"];
   const isOwner=profile?.role==="owner";
@@ -440,6 +511,17 @@ export default function App() {
     await addDoc(collection(db,"documents",user.uid,"files"),{...docInfo,createdAt:serverTimestamp()});
   }
 
+  useEffect(()=>{
+    if(!isOwner||!user)return;
+    const q=query(collection(db,"contracts",user.uid,"files"),orderBy("createdAt","desc"));
+    const unsub=onSnapshot(q,snap=>setContracts(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    return unsub;
+  },[isOwner,user]);
+
+  async function saveContract(contractInfo){
+    await addDoc(collection(db,"contracts",user.uid,"files"),{...contractInfo,createdAt:serverTimestamp()});
+  }
+
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
   const persist=async(ref,data)=>{setSaving(true);await updateDoc(ref,data);setSaving(false);};
 
@@ -455,6 +537,7 @@ export default function App() {
     {id:"calendar",icon:"📅",label:t.calendar},
     {id:"messages",icon:"💬",label:t.messages},
     {id:"documentos",icon:"📁",label:t.documents},
+    {id:"contratos",icon:"📝",label:t.contracts},
   ];
   const tenantNav=[
     {id:"t-home",icon:"🏠",label:t.myHome},
@@ -528,6 +611,7 @@ export default function App() {
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
       if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
+      if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onDownload={(c)=>generateContractDocx(c)}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -542,6 +626,16 @@ export default function App() {
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
+    if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
+      // 1. Generate and download docx
+      const filename=await generateContractDocx(data);
+      // 2. Create tenant in Firebase
+      await createTenant({name:data.tenantName,unit:data.unit,phone:data.phone,rent:data.rent,email:data.email,password:data.password,contractStart:data.contractStartISO,contractEnd:data.contractEndISO});
+      // 3. Save contract record
+      const year=data.signYear;
+      await saveContract({...data,filename,year,date:today()});
+      showToast("✅ "+t.tenantCreated);
+    }}/>;
     return null;
   };
 
@@ -1351,6 +1445,172 @@ function DocumentsPage({t,tenants,documents,onGenerate}){
             </div>
           ))}
       </div>
+    </div>
+  );
+}
+
+function ContractsPage({t,contracts,onNew,onDownload}){
+  const byYear={};
+  contracts.forEach(c=>{
+    const y=c.year||c.signYear||"Sin año";
+    if(!byYear[y])byYear[y]=[];
+    byYear[y].push(c);
+  });
+  const years=Object.keys(byYear).sort((a,b)=>b-a);
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>📝 {t.contracts}</h2><p>{contracts.length} contratos</p></div>
+        <button className="btn btn-p" onClick={onNew}>➕ {t.newContract}</button>
+      </div>
+      {contracts.length===0
+        ?<div className="card"><p style={{color:"var(--warm)",textAlign:"center",padding:20}}>📂 {t.noContracts}</p></div>
+        :years.map(year=>(
+          <div key={year} className="card">
+            <div className="card-title">📁 {year}</div>
+            {byYear[year].map(c=>(
+              <div key={c.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 0",borderBottom:"1px solid var(--border)"}}>
+                <div style={{fontSize:28}}>📄</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600,fontSize:15}}>{c.unit} — {c.tenantName}</div>
+                  <div style={{fontSize:12,color:"var(--warm)",marginTop:2}}>
+                    Firmado el {c.signDay}/{c.signMonth}/{c.signYear} · {c.startDay}/{c.startMonth}/{c.startYear} → {c.endDay}/{c.endMonth}/{c.endYear} · {c.rent}€/mes
+                  </div>
+                </div>
+                <button className="btn btn-o btn-sm" onClick={()=>onDownload(c)}>📥 {t.downloadDoc}</button>
+              </div>
+            ))}
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function NewContractModal({t,onClose,onSave}){
+  const now=new Date();
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const [step,setStep]=useState(1); // 1=datos, 2=firma
+  const [tenantSigned,setTenantSigned]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [form,setForm]=useState({
+    unit:"", tenantName:"", tenantDni:"", tenantAddress:"", phone:"", email:"", password:"", rent:"",
+    signDay:String(now.getDate()), signMonth:monthNames[now.getMonth()], signYear:String(now.getFullYear()),
+    startDay:"1", startMonth:monthNames[now.getMonth()], startYear:String(now.getFullYear()),
+    endDay:"28", endMonth:monthNames[now.getMonth()], endYear:String(now.getFullYear()+2),
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  // ISO dates for tenant creation
+  const toISO=(day,month,year)=>{
+    const idx=monthNames.indexOf(month.toLowerCase());
+    if(idx<0)return"";
+    return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+  };
+
+  const handleSave=async()=>{
+    if(!tenantSigned){alert("El inquilino debe aceptar el contrato");return;}
+    setSaving(true);
+    await onSave({...form, contractStartISO:toISO(form.startDay,form.startMonth,form.startYear), contractEndISO:toISO(form.endDay,form.endMonth,form.endYear)});
+    setSaving(false);
+    onClose();
+  };
+
+  return(
+    <div className="modal" style={{maxWidth:560}}>
+      <div className="modal-hd">
+        <h3>{step===1?"📋 "+t.contractDetails:"✍️ "+t.tenantSignature}</h3>
+        <button className="close-btn" onClick={onClose}>✕</button>
+      </div>
+
+      {step===1&&(
+        <>
+          <div style={{display:"flex",gap:8,marginBottom:16}}>
+            <div style={{flex:1,height:4,borderRadius:4,background:"var(--terra)"}}/>
+            <div style={{flex:1,height:4,borderRadius:4,background:"var(--border)"}}/>
+          </div>
+          <div className="fg"><label>Piso / Habitación / Trastero</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Piso 1, Trastero 3..."/></div>
+          <div className="gr2">
+            <div className="fg"><label>{t.name}</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/></div>
+            <div className="fg"><label>{t.dni}</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/></div>
+          </div>
+          <div className="fg"><label>{t.address}</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/></div>
+          <div className="gr2">
+            <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+            <div className="fg"><label>{t.rent} (€/mes)</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
+          </div>
+          <hr/>
+          <div style={{fontWeight:600,fontSize:13,marginBottom:12,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas</div>
+          <div className="gr2">
+            <div className="fg"><label>{t.signDate}</label>
+              <div style={{display:"flex",gap:6}}>
+                <input style={{width:50}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
+                <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
+                <input style={{width:60}} value={form.signYear} onChange={e=>set("signYear",e.target.value)} placeholder="año"/>
+              </div>
+            </div>
+            <div className="fg"><label>{t.startDate}</label>
+              <div style={{display:"flex",gap:6}}>
+                <input style={{width:50}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
+                <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
+                <input style={{width:60}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
+              </div>
+            </div>
+          </div>
+          <div className="gr2">
+            <div className="fg"><label>{t.endDate}</label>
+              <div style={{display:"flex",gap:6}}>
+                <input style={{width:50}} value={form.endDay} onChange={e=>set("endDay",e.target.value)}/>
+                <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)}/>
+                <input style={{width:60}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
+              </div>
+            </div>
+          </div>
+          <hr/>
+          <div style={{fontWeight:600,fontSize:13,marginBottom:12,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Acceso app</div>
+          <div className="gr2">
+            <div className="fg"><label>{t.email}</label><input type="email" value={form.email} onChange={e=>set("email",e.target.value)}/></div>
+            <div className="fg"><label>{t.accessPassword}</label><input type="password" value={form.password} onChange={e=>set("password",e.target.value)}/></div>
+          </div>
+          <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.unit||!form.tenantName||!form.email||!form.rent}>
+            Siguiente → Firma del inquilino
+          </button>
+        </>
+      )}
+
+      {step===2&&(
+        <>
+          <div style={{display:"flex",gap:8,marginBottom:16}}>
+            <div style={{flex:1,height:4,borderRadius:4,background:"var(--terra)"}}/>
+            <div style={{flex:1,height:4,borderRadius:4,background:"var(--terra)"}}/>
+          </div>
+          <div style={{background:"var(--cream)",borderRadius:14,padding:20,marginBottom:20,fontSize:13,lineHeight:1.7,maxHeight:300,overflowY:"auto"}}>
+            <p style={{fontWeight:700,textAlign:"center",marginBottom:12}}>CONTRATO DE ARRENDAMIENTO DE {form.unit.toUpperCase()}</p>
+            <p>En Calafell, a {form.signDay} de {form.signMonth} de {form.signYear}.</p>
+            <p><strong>ARRENDADOR:</strong> Joana Solé Santacana, DNI 39618190T</p>
+            <p><strong>ARRENDATARIO:</strong> {form.tenantName}, DNI {form.tenantDni}</p>
+            <p><strong>Duración:</strong> {form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</p>
+            <p><strong>Renta mensual:</strong> {form.rent} €</p>
+            <p style={{marginTop:8,fontSize:12,color:"var(--warm)"}}>La renta se actualizará anualmente según IPC + 1,5%. Los gastos de electricidad, agua y basuras corren a cargo del arrendatario. Queda prohibido el subarriendo sin consentimiento escrito del arrendador.</p>
+          </div>
+          <div style={{background:tenantSigned?"#E6F4ED":"#FDF6E3",border:`2px solid ${tenantSigned?"#4A9B6F":"#D4A853"}`,borderRadius:14,padding:18,marginBottom:20,cursor:"pointer"}} onClick={()=>setTenantSigned(v=>!v)}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:14}}>
+              <div style={{width:28,height:28,borderRadius:8,border:`2px solid ${tenantSigned?"#4A9B6F":"#D4A853"}`,background:tenantSigned?"#4A9B6F":"white",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:18,color:"white",fontWeight:700}}>
+                {tenantSigned?"✓":""}
+              </div>
+              <div>
+                <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>✍️ Firma del inquilino: {form.tenantName}</div>
+                <div style={{fontSize:13,color:"var(--warm)"}}>{t.tenantConfirm}</div>
+              </div>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button className="btn btn-o" onClick={()=>setStep(1)}>← Volver</button>
+            <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={!tenantSigned||saving}>
+              {saving?"⏳ Creando...":"✅ Firmar y crear contrato"}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
