@@ -10,7 +10,6 @@ import {
   onSnapshot, addDoc, orderBy, serverTimestamp, updateDoc
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
-import { Document as DocxDocument, Packer, Paragraph, TextRun, AlignmentType } from "docx";
 import { jsPDF } from "jspdf";
 
 const OWNER_EMAIL = "bertasuau@gmail.com";
@@ -115,64 +114,115 @@ function generateAnnualExcel(tenants, year) {
   return {year, filename:`MiAlquiler_Resumen_${year}.xlsx`, date:new Date().toLocaleDateString("es-ES"), totI, totG, totInv, profit:totI-totG-totInv};
 }
 
-async function generateContractDocx(data) {
+function generateContractDocx(data) {
   const { unit, tenantName, tenantDni, tenantAddress, signDay, signMonth, signYear,
           startDay, startMonth, startYear, endDay, endMonth, endYear, rent } = data;
-  const b = (text, size=22) => new TextRun({ text, bold:true, size, font:"Arial" });
-  const n = (text, size=22) => new TextRun({ text, size, font:"Arial" });
-  const br = () => new Paragraph({ children:[] });
-  const p = (children, align=AlignmentType.JUSTIFIED) => new Paragraph({ children, alignment:align, spacing:{after:160} });
-  const doc = new DocxDocument({
-    styles:{ default:{ document:{ run:{ font:"Arial", size:22 } } } },
-    sections:[{ properties:{ page:{ size:{width:11906,height:16838}, margin:{top:1440,right:1440,bottom:1440,left:1440} } },
-    children:[
-      p([b(`CONTRATO DE ARRENDAMIENTO DE ${unit.toUpperCase()}`,28)], AlignmentType.CENTER),
-      br(),
-      p([n(`En Calafell, a ${signDay} de ${signMonth} de ${signYear}.`)]),
-      br(),
-      p([b("REUNIDOS")]),
-      p([n("De una parte, D./Dña. "),b("JOANA SOLÉ SANTACANA"),n(", mayor de edad, con DNI nº "),b("39618190T"),n(", y domicilio en "),b("PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª"),n(", en adelante "),b("EL ARRENDADOR"),n(".")]),
-      p([n("Y de otra parte, D./Dña. "),b(tenantName),n(", mayor de edad, con DNI nº "),b(tenantDni),n(", y domicilio en "),b(tenantAddress),n(", en adelante "),b("EL ARRENDATARIO"),n(".")]),
-      p([n("Ambas partes se reconocen capacidad legal suficiente para formalizar el presente contrato de arrendamiento y, a tal efecto,")]),
-      br(),
-      p([b("EXPONEN")]),
-      p([n("1. Que el ARRENDADOR es propietario del local situado en "),b("Carrer Montserrat, nº 14, Calafell (Tarragona)"),n(".")]),
-      p([n("2. Que el ARRENDATARIO ocupa dicho local en virtud de contrato previo, y que ambas partes desean renovar el arrendamiento bajo las siguientes condiciones.")]),
-      p([n("⸻")], AlignmentType.CENTER),
-      p([b("CLÁUSULAS")]),
-      p([b("Primera. Objeto")]),
-      p([n("El ARRENDADOR renueva el arrendamiento a favor del ARRENDATARIO sobre el local situado en "),b("Carrer Montserrat, nº 14, Calafell"),n(", destinado exclusivamente a uso comercial.")]),
-      p([b("Segunda. Duración")]),
-      p([n("La duración del presente contrato será de dos (2) años, comenzando el día "),b(`${startDay} de ${startMonth} de ${startYear}`),n(" y finalizando el "),b(`${endDay} de ${endMonth} de ${endYear}`),n(".")]),
-      p([b("Tercera. Renta")]),
-      p([n("La renta mensual se fija en "),b(`${rent} €`),n(", que el ARRENDATARIO abonará dentro de los cinco primeros días de cada mes mediante transferencia bancaria a la cuenta indicada por el ARRENDADOR.")]),
-      p([b("Cuarta. Actualización de la renta")]),
-      p([n("La renta se actualizará anualmente, aplicando la variación anual del Índice de Precios al Consumo (IPC) publicado por el Instituto Nacional de Estadística correspondiente al mes de la revisión, incrementada en un 1,5% adicional. La primera actualización tendrá lugar a los 12 meses de la firma del presente contrato.")]),
-      p([b("Quinta. Gastos y suministros")]),
-      p([n("Serán de cuenta exclusiva del ARRENDATARIO los gastos de electricidad, agua, y tasa de basuras, así como cualquier otro suministro que se contrate en relación con el local.")]),
-      p([b("Sexta. Fianza")]),
-      p([n("Al tratarse de una renovación del contrato, no se constituye fianza adicional, dado que no existe obligación entre las partes de realizar nuevo depósito.")]),
-      p([b("Séptima. Conservación del local")]),
-      p([n("El ARRENDATARIO se obliga a mantener el local en perfecto estado de conservación, corriendo de su cargo las reparaciones menores derivadas del uso ordinario.")]),
-      p([b("Octava. Cesión y subarriendo")]),
-      p([n("Queda prohibida la cesión del contrato y el subarriendo total o parcial del local sin el consentimiento expreso y por escrito del ARRENDADOR.")]),
-      p([b("Novena. Legislación aplicable")]),
-      p([n("El presente contrato se regirá por lo establecido en el Código Civil, la Ley de Arrendamientos Urbanos vigente, y demás disposiciones aplicables.")]),
-      br(),
-      p([n("Y en prueba de conformidad, firman el presente contrato por duplicado ejemplar y a un solo efecto, en el lugar y fecha arriba indicados.")]),
-      br(),br(),
-      new Paragraph({ children:[b("EL ARRENDADOR"),new TextRun({text:"				",size:22}),b("EL ARRENDATARIO")], tabStops:[{type:"left",position:5000}], spacing:{after:800} }),
-      new Paragraph({ children:[n("Firma: _______________________"),new TextRun({text:"		",size:22}),n("Firma: _______________________")], tabStops:[{type:"left",position:5000}], spacing:{after:400} }),
-      new Paragraph({ children:[new TextRun({text:"Berta Suau",bold:true,italics:true,size:22,font:"Arial"}),new TextRun({text:"				",size:22}),new TextRun({text:tenantName,bold:true,italics:true,size:22,font:"Arial"})], tabStops:[{type:"left",position:5000}] }),
-    ]}]
-  });
-  const buffer = await Packer.toBuffer(doc);
-  const blob = new Blob([buffer], {type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href=url; a.download=`Contrato_${unit.replace(/ /g,"_")}_${tenantName.replace(/ /g,"_")}_${signYear}.docx`;
-  a.click(); URL.revokeObjectURL(url);
-  return a.download;
+  const d = new jsPDF({ format:"a4", unit:"mm" });
+  const lm=20, rm=190, maxW=rm-lm;
+  let y=20;
+  const lh=6;
+
+  function addText(segments, lineW=maxW) {
+    // segments: [{text, bold}]
+    let x=lm;
+    // Build lines by wrapping words
+    let lines=[[]]; // array of segments per line
+    segments.forEach(seg=>{
+      const words=seg.text.split(" ");
+      words.forEach((word,wi)=>{
+        const w=word+(wi<words.length-1?" ":"");
+        d.setFont("helvetica", seg.bold?"bold":"normal");
+        const ww=d.getTextWidth(w);
+        const lineW2=d.getTextWidth(lines[lines.length-1].map(s=>s.text).join(""));
+        if(lineW2+ww>lineW && lines[lines.length-1].length>0){
+          lines.push([{text:w,bold:seg.bold}]);
+        } else {
+          const last=lines[lines.length-1];
+          if(last.length>0&&last[last.length-1].bold===seg.bold){
+            last[last.length-1].text+=w;
+          } else {
+            last.push({text:w,bold:seg.bold});
+          }
+        }
+      });
+    });
+    lines.forEach(line=>{
+      if(y>280){d.addPage();y=20;}
+      let cx=lm;
+      line.forEach(seg=>{
+        d.setFont("helvetica",seg.bold?"bold":"normal");
+        d.setFontSize(10);
+        d.text(seg.text,cx,y);
+        cx+=d.getTextWidth(seg.text);
+      });
+      y+=lh;
+    });
+    y+=2;
+  }
+
+  function title(text){
+    if(y>270){d.addPage();y=20;}
+    d.setFont("helvetica","bold"); d.setFontSize(13);
+    d.text(text, 105, y, {align:"center"}); y+=8;
+    d.setFontSize(10);
+  }
+  function heading(text){
+    if(y>270){d.addPage();y=20;}
+    d.setFont("helvetica","bold"); d.setFontSize(10);
+    d.text(text,lm,y); y+=lh+1;
+  }
+  function space(){y+=3;}
+
+  title(`CONTRATO DE ARRENDAMIENTO DE ${unit.toUpperCase()}`);
+  space();
+  addText([{text:`En Calafell, a ${signDay} de ${signMonth} de ${signYear}.`}]);
+  space();
+  heading("REUNIDOS");
+  addText([{text:"De una parte, D./Dña. "},{text:"JOANA SOLÉ SANTACANA",bold:true},{text:", mayor de edad, con DNI nº "},{text:"39618190T",bold:true},{text:", domicilio en "},{text:"PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª",bold:true},{text:", en adelante "},{text:"EL ARRENDADOR",bold:true},{text:"."}]);
+  addText([{text:"Y de otra parte, D./Dña. "},{text:tenantName,bold:true},{text:", DNI nº "},{text:tenantDni,bold:true},{text:", domicilio en "},{text:tenantAddress,bold:true},{text:", en adelante "},{text:"EL ARRENDATARIO",bold:true},{text:"."}]);
+  addText([{text:"Ambas partes se reconocen capacidad legal suficiente para formalizar el presente contrato."}]);
+  space();
+  heading("EXPONEN");
+  addText([{text:"1. El ARRENDADOR es propietario del local en "},{text:"Carrer Montserrat, nº 14, Calafell (Tarragona)",bold:true},{text:"."}]);
+  addText([{text:"2. Ambas partes desean renovar el arrendamiento bajo las siguientes condiciones."}]);
+  space();
+  heading("CLÁUSULAS");
+  heading("Primera. Objeto");
+  addText([{text:"El ARRENDADOR renueva el arrendamiento sobre el local en "},{text:"Carrer Montserrat, nº 14, Calafell",bold:true},{text:", uso comercial."}]);
+  heading("Segunda. Duración");
+  addText([{text:"Duración dos (2) años: del "},{text:`${startDay} de ${startMonth} de ${startYear}`,bold:true},{text:" al "},{text:`${endDay} de ${endMonth} de ${endYear}`,bold:true},{text:"."}]);
+  heading("Tercera. Renta");
+  addText([{text:"Renta mensual: "},{text:`${rent} €`,bold:true},{text:", abonada los cinco primeros días del mes por transferencia bancaria."}]);
+  heading("Cuarta. Actualización de la renta");
+  addText([{text:"Actualización anual según IPC + 1,5% adicional. Primera actualización a los 12 meses de la firma."}]);
+  heading("Quinta. Gastos y suministros");
+  addText([{text:"Electricidad, agua y basuras son a cargo exclusivo del ARRENDATARIO."}]);
+  heading("Sexta. Fianza");
+  addText([{text:"Al ser renovación, no se constituye fianza adicional."}]);
+  heading("Séptima. Conservación");
+  addText([{text:"El ARRENDATARIO mantendrá el local en perfecto estado. Reparaciones menores a su cargo."}]);
+  heading("Octava. Cesión y subarriendo");
+  addText([{text:"Prohibida la cesión y el subarriendo sin consentimiento escrito del ARRENDADOR."}]);
+  heading("Novena. Legislación");
+  addText([{text:"Se rige por el Código Civil y la Ley de Arrendamientos Urbanos vigente."}]);
+  space();
+  addText([{text:"Y en prueba de conformidad, firman el presente contrato por duplicado en el lugar y fecha indicados."}]);
+  y+=10;
+  if(y>250){d.addPage();y=20;}
+  d.setFont("helvetica","bold"); d.setFontSize(10);
+  d.text("EL ARRENDADOR",lm,y);
+  d.text("EL ARRENDATARIO",115,y);
+  y+=20;
+  d.setFont("helvetica","normal");
+  d.text("Firma: _______________________",lm,y);
+  d.text("Firma: _______________________",115,y);
+  y+=8;
+  d.setFont("helvetica","bolditalic");
+  d.text("Berta Suau",lm,y);
+  d.text(tenantName,115,y);
+  const filename=`Contrato_${unit.replace(/ /g,"_")}_${tenantName.replace(/ /g,"_")}_${signYear}.pdf`;
+  d.save(filename);
+  return filename;
 }
 
 function checkIPC(tenants) {
@@ -628,7 +678,7 @@ export default function App() {
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
     if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
       // 1. Generate and download docx IMMEDIATELY
-      const filename = await generateContractDocx(data);
+      const filename = generateContractDocx(data);
       setModal(null);
       showToast("📄 Contrato descargado — creando inquilino...");
       // 2. Create tenant + save contract in background
@@ -1474,7 +1524,7 @@ function ContractsPage({t,contracts,onNew,onDownload}){
               <div key={c.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 0",borderBottom:"1px solid var(--border)"}}>
                 <div style={{fontSize:28}}>📄</div>
                 <div style={{flex:1}}>
-                  <div style={{fontWeight:600,fontSize:15}}>{c.unit} — {c.tenantName}</div>
+                  <div style={{fontWeight:600,fontSize:15}}>📄 {c.unit} — {c.tenantName}</div>
                   <div style={{fontSize:12,color:"var(--warm)",marginTop:2}}>
                     Firmado el {c.signDay}/{c.signMonth}/{c.signYear} · {c.startDay}/{c.startMonth}/{c.startYear} → {c.endDay}/{c.endMonth}/{c.endYear} · {c.rent}€/mes
                   </div>
