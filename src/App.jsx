@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, LineChart, Line } from "recharts";
-import { auth, db } from "./firebase";
+import { auth, db, tenantAuth } from "./firebase";
 import {
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
   signOut, onAuthStateChanged,
@@ -636,12 +636,8 @@ export default function App() {
 
   async function createTenant({name,unit,phone,rent,email,password,contractStart,contractEnd}){
     try{
-      const {initializeApp,getApps}=await import("firebase/app");
-      const {getAuth,createUserWithEmailAndPassword:cu}=await import("firebase/auth");
-      const secondaryApp=getApps().find(a=>a.name==="secondary")||initializeApp(auth.app.options,"secondary");
-      const secondaryAuth=getAuth(secondaryApp);
-      const cred=await cu(secondaryAuth,email,password);
-      await secondaryAuth.signOut();
+      const cred=await createUserWithEmailAndPassword(tenantAuth,email,password);
+      await tenantAuth.signOut();
       await setDoc(doc(db,"users",cred.user.uid),{
         name,unit,phone,rent:parseFloat(rent),email,role:"tenant",joined:today(),
         contractStart:contractStart||"",contractEnd:contractEnd||"",
@@ -682,28 +678,11 @@ export default function App() {
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
     if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
       const year=data.signYear;
-      // Step 1: Save tenant profile in Firestore with a generated ID
-      // We use addDoc so Firestore generates the UID — no auth needed
-      const tenantRef = doc(collection(db,"users"));
-      const tenantUid = tenantRef.id;
       try{
-        await setDoc(tenantRef,{
-          name:data.tenantName, unit:data.unit, phone:data.phone||"",
-          rent:parseFloat(data.rent), email:data.email, role:"tenant",
-          joined:today(), contractStart:data.contractStartISO||"",
-          contractEnd:data.contractEndISO||"",
-          payments:{}, costs:[], maintenance:[], lang:"es",
-          pendingPassword:data.password // stored so account can be created on first login
-        });
-        // Step 2: Create Firebase Auth account using secondary app
-        const {initializeApp,getApps} = await import("firebase/app");
-        const {getAuth,createUserWithEmailAndPassword:cu} = await import("firebase/auth");
-        const cfg = auth.app.options;
-        const secApp = getApps().find(a=>a.name==="sec") || initializeApp(cfg,"sec");
-        const secAuth = getAuth(secApp);
-        const cred = await cu(secAuth, data.email, data.password);
-        await secAuth.signOut();
-        // Step 3: Update Firestore with real Firebase Auth UID
+        // 1. Create auth account with tenantAuth (secondary app — owner session untouched)
+        const cred=await createUserWithEmailAndPassword(tenantAuth,data.email,data.password);
+        await tenantAuth.signOut();
+        // 2. Save tenant profile in Firestore with real UID
         await setDoc(doc(db,"users",cred.user.uid),{
           name:data.tenantName, unit:data.unit, phone:data.phone||"",
           rent:parseFloat(data.rent), email:data.email, role:"tenant",
@@ -711,15 +690,11 @@ export default function App() {
           contractEnd:data.contractEndISO||"",
           payments:{}, costs:[], maintenance:[], lang:"es"
         });
-        // Remove the temp doc
-        const {deleteDoc} = await import("firebase/firestore");
-        await deleteDoc(tenantRef);
-        showToast("✅ Inquilino y contrato guardados");
+        // 3. Save contract
         await saveContract({...data, year, date:today(), tenantUid:cred.user.uid});
+        showToast("✅ Inquilino y contrato guardados");
       }catch(e){
-        // If auth creation fails, tenant doc still exists with generated ID
-        showToast("✅ Contrato guardado · " + (e.code==="auth/email-already-in-use"?"Email ya registrado":e.message));
-        await saveContract({...data, year, date:today(), tenantUid});
+        showToast("⚠️ Error: "+(e.code==="auth/email-already-in-use"?"Este email ya existe":e.message));
       }
     }}/>;
     return null;
