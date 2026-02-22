@@ -16,3 +16,6 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
+// Secondary app/auth for tenant account creation so owner session is not affected
+const tenantApp = initializeApp(firebaseConfig, "tenantApp");
+export const tenantAuth = getAuth(tenantApp);
