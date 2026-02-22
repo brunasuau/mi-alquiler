@@ -677,16 +677,13 @@ export default function App() {
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
     if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
-      // 1. Generate and download docx IMMEDIATELY
-      const filename = generateContractDocx(data);
-      setModal(null);
-      showToast("📄 Contrato descargado — creando inquilino...");
-      // 2. Create tenant + save contract in background
       const year=data.signYear;
+      // 1. Save contract data to Firestore
+      await saveContract({...data, year, date:today()});
+      // 2. Create tenant in background
       createTenant({name:data.tenantName,unit:data.unit,phone:data.phone,rent:data.rent,email:data.email,password:data.password,contractStart:data.contractStartISO,contractEnd:data.contractEndISO})
-        .then(()=>saveContract({...data,filename,year,date:today()}))
         .then(()=>showToast("✅ "+t.tenantCreated))
-        .catch(e=>showToast("⚠️ Error: "+e.message));
+        .catch(e=>showToast("⚠️ Error creando inquilino: "+e.message));
     }}/>;
     return null;
   };
@@ -1541,132 +1538,141 @@ function ContractsPage({t,contracts,onNew,onDownload}){
 function NewContractModal({t,onClose,onSave}){
   const now=new Date();
   const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-  const [step,setStep]=useState(1); // 1=datos, 2=firma
+  const [step,setStep]=useState(1);
   const [tenantSigned,setTenantSigned]=useState(false);
   const [saving,setSaving]=useState(false);
+  const [savedData,setSavedData]=useState(null);
   const [form,setForm]=useState({
-    unit:"", tenantName:"", tenantDni:"", tenantAddress:"", phone:"", email:"", password:"", rent:"",
-    signDay:String(now.getDate()), signMonth:monthNames[now.getMonth()], signYear:String(now.getFullYear()),
-    startDay:"1", startMonth:monthNames[now.getMonth()], startYear:String(now.getFullYear()),
-    endDay:"28", endMonth:monthNames[now.getMonth()], endYear:String(now.getFullYear()+2),
+    unit:"",tenantName:"",tenantDni:"",tenantAddress:"",phone:"",email:"",password:"",rent:"",
+    signDay:String(now.getDate()),signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
+    startDay:"1",startMonth:monthNames[now.getMonth()],startYear:String(now.getFullYear()),
+    endDay:"28",endMonth:monthNames[now.getMonth()],endYear:String(now.getFullYear()+2),
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const toISO=(day,month,year)=>{const idx=monthNames.indexOf(month.toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
 
-  // ISO dates for tenant creation
-  const toISO=(day,month,year)=>{
-    const idx=monthNames.indexOf(month.toLowerCase());
-    if(idx<0)return"";
-    return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-  };
-
-  const handleSave=async()=>{
-    if(!tenantSigned){alert("El inquilino debe aceptar el contrato");return;}
+  const handleSign=async()=>{
+    if(!tenantSigned)return;
     setSaving(true);
-    // Call onSave — modal closes inside onSave (before tenant creation finishes)
-    onSave({...form, contractStartISO:toISO(form.startDay,form.startMonth,form.startYear), contractEndISO:toISO(form.endDay,form.endMonth,form.endYear)});
+    const data={...form,contractStartISO:toISO(form.startDay,form.startMonth,form.startYear),contractEndISO:toISO(form.endDay,form.endMonth,form.endYear)};
+    await onSave(data);
+    setSavedData(data);
     setSaving(false);
+    setStep(3);
   };
+
+  const bar=(active,total)=>(
+    <div style={{display:"flex",gap:6,marginBottom:18}}>
+      {Array.from({length:total},(_,i)=>(
+        <div key={i} style={{flex:1,height:4,borderRadius:4,background:i<active?"var(--terra)":"var(--border)"}}/>
+      ))}
+    </div>
+  );
 
   return(
     <div className="modal" style={{maxWidth:560}}>
-      <div className="modal-hd">
-        <h3>{step===1?"📋 "+t.contractDetails:"✍️ "+t.tenantSignature}</h3>
-        <button className="close-btn" onClick={onClose}>✕</button>
-      </div>
+      {step===1&&<>
+        <div className="modal-hd"><h3>📋 {t.contractDetails}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(1,3)}
+        <div className="fg"><label>Piso / Habitación / Trastero</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Piso 1, Trastero 3..."/></div>
+        <div className="gr2">
+          <div className="fg"><label>{t.name}</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/></div>
+          <div className="fg"><label>{t.dni}</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/></div>
+        </div>
+        <div className="fg"><label>{t.address}</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/></div>
+        <div className="gr2">
+          <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+          <div className="fg"><label>{t.rent} €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
+        </div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas</div>
+        <div className="gr2">
+          <div className="fg"><label>{t.signDate}</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
+              <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+            </div>
+          </div>
+          <div className="fg"><label>{t.startDate}</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
+              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
+              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
+            </div>
+          </div>
+        </div>
+        <div className="fg"><label>{t.endDate}</label>
+          <div style={{display:"flex",gap:4}}>
+            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)}/>
+            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)}/>
+            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
+          </div>
+        </div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Acceso app</div>
+        <div className="gr2">
+          <div className="fg"><label>{t.email}</label><input type="email" value={form.email} onChange={e=>set("email",e.target.value)}/></div>
+          <div className="fg"><label>{t.accessPassword}</label><input type="password" value={form.password} onChange={e=>set("password",e.target.value)}/></div>
+        </div>
+        <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.unit||!form.tenantName||!form.email||!form.rent}>
+          Siguiente → Firma ›
+        </button>
+      </>}
 
-      {step===1&&(
-        <>
-          <div style={{display:"flex",gap:8,marginBottom:16}}>
-            <div style={{flex:1,height:4,borderRadius:4,background:"var(--terra)"}}/>
-            <div style={{flex:1,height:4,borderRadius:4,background:"var(--border)"}}/>
-          </div>
-          <div className="fg"><label>Piso / Habitación / Trastero</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Piso 1, Trastero 3..."/></div>
-          <div className="gr2">
-            <div className="fg"><label>{t.name}</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/></div>
-            <div className="fg"><label>{t.dni}</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/></div>
-          </div>
-          <div className="fg"><label>{t.address}</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/></div>
-          <div className="gr2">
-            <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
-            <div className="fg"><label>{t.rent} (€/mes)</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
-          </div>
-          <hr/>
-          <div style={{fontWeight:600,fontSize:13,marginBottom:12,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas</div>
-          <div className="gr2">
-            <div className="fg"><label>{t.signDate}</label>
-              <div style={{display:"flex",gap:6}}>
-                <input style={{width:50}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
-                <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
-                <input style={{width:60}} value={form.signYear} onChange={e=>set("signYear",e.target.value)} placeholder="año"/>
-              </div>
+      {step===2&&<>
+        <div className="modal-hd"><h3>✍️ {t.tenantSignature}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(2,3)}
+        <div style={{background:"var(--cream)",borderRadius:12,padding:16,marginBottom:16,fontSize:13,lineHeight:1.8,maxHeight:240,overflowY:"auto"}}>
+          <p style={{fontWeight:700,textAlign:"center",marginBottom:10,fontSize:14}}>CONTRATO DE ARRENDAMIENTO — {form.unit.toUpperCase()}</p>
+          <p>📍 Calafell, <strong>{form.signDay} de {form.signMonth} de {form.signYear}</strong></p>
+          <p>👤 <strong>Arrendador:</strong> Joana Solé Santacana · DNI 39618190T</p>
+          <p>👤 <strong>Arrendatario:</strong> {form.tenantName} · DNI {form.tenantDni}</p>
+          <p>📅 <strong>Periodo:</strong> {form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</p>
+          <p>💶 <strong>Renta:</strong> {form.rent} €/mes · IPC + 1,5% anual</p>
+          <p style={{fontSize:11,color:"var(--warm)",marginTop:6}}>Suministros a cargo del arrendatario. Prohibido subarrendar sin consentimiento escrito.</p>
+        </div>
+        <div style={{background:tenantSigned?"#E6F4ED":"var(--cream)",border:`2px solid ${tenantSigned?"#4A9B6F":"var(--border)"}`,borderRadius:14,padding:16,marginBottom:16,cursor:"pointer",transition:"all .2s"}} onClick={()=>setTenantSigned(v=>!v)}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:26,height:26,borderRadius:7,border:`2px solid ${tenantSigned?"#4A9B6F":"var(--warm)"}`,background:tenantSigned?"#4A9B6F":"white",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:700,fontSize:16,flexShrink:0}}>
+              {tenantSigned?"✓":""}
             </div>
-            <div className="fg"><label>{t.startDate}</label>
-              <div style={{display:"flex",gap:6}}>
-                <input style={{width:50}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
-                <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
-                <input style={{width:60}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
-              </div>
+            <div>
+              <div style={{fontWeight:600,fontSize:13}}>✍️ {form.tenantName}</div>
+              <div style={{fontSize:12,color:"var(--warm)"}}>{t.tenantConfirm}</div>
             </div>
           </div>
-          <div className="gr2">
-            <div className="fg"><label>{t.endDate}</label>
-              <div style={{display:"flex",gap:6}}>
-                <input style={{width:50}} value={form.endDay} onChange={e=>set("endDay",e.target.value)}/>
-                <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)}/>
-                <input style={{width:60}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
-              </div>
-            </div>
-          </div>
-          <hr/>
-          <div style={{fontWeight:600,fontSize:13,marginBottom:12,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Acceso app</div>
-          <div className="gr2">
-            <div className="fg"><label>{t.email}</label><input type="email" value={form.email} onChange={e=>set("email",e.target.value)}/></div>
-            <div className="fg"><label>{t.accessPassword}</label><input type="password" value={form.password} onChange={e=>set("password",e.target.value)}/></div>
-          </div>
-          <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.unit||!form.tenantName||!form.email||!form.rent}>
-            Siguiente → Firma del inquilino
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
+          <button className="btn btn-p" style={{flex:1}} onClick={handleSign} disabled={!tenantSigned||saving}>
+            {saving?"⏳ Guardando...":"✅ Firmar y guardar"}
           </button>
-        </>
-      )}
+        </div>
+      </>}
 
-      {step===2&&(
-        <>
-          <div style={{display:"flex",gap:8,marginBottom:16}}>
-            <div style={{flex:1,height:4,borderRadius:4,background:"var(--terra)"}}/>
-            <div style={{flex:1,height:4,borderRadius:4,background:"var(--terra)"}}/>
+      {step===3&&<>
+        <div className="modal-hd"><h3>✅ Contrato guardado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(3,3)}
+        <div style={{textAlign:"center",padding:"16px 0"}}>
+          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:6}}>¡Contrato firmado!</h3>
+          <p style={{color:"var(--warm)",fontSize:13,marginBottom:18}}>Guardado en <strong>Contratos</strong>. El inquilino ya tiene acceso a la app.</p>
+          <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:18,textAlign:"left",fontSize:13}}>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Piso</span><strong>{form.unit}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.tenantName}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
           </div>
-          <div style={{background:"var(--cream)",borderRadius:14,padding:20,marginBottom:20,fontSize:13,lineHeight:1.7,maxHeight:300,overflowY:"auto"}}>
-            <p style={{fontWeight:700,textAlign:"center",marginBottom:12}}>CONTRATO DE ARRENDAMIENTO DE {form.unit.toUpperCase()}</p>
-            <p>En Calafell, a {form.signDay} de {form.signMonth} de {form.signYear}.</p>
-            <p><strong>ARRENDADOR:</strong> Joana Solé Santacana, DNI 39618190T</p>
-            <p><strong>ARRENDATARIO:</strong> {form.tenantName}, DNI {form.tenantDni}</p>
-            <p><strong>Duración:</strong> {form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</p>
-            <p><strong>Renta mensual:</strong> {form.rent} €</p>
-            <p style={{marginTop:8,fontSize:12,color:"var(--warm)"}}>La renta se actualizará anualmente según IPC + 1,5%. Los gastos de electricidad, agua y basuras corren a cargo del arrendatario. Queda prohibido el subarriendo sin consentimiento escrito del arrendador.</p>
+          <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+            <button className="btn btn-p" onClick={()=>generateContractDocx(savedData||form)}>📥 Descargar PDF</button>
+            <button className="btn btn-o" onClick={onClose}>Cerrar</button>
           </div>
-          <div style={{background:tenantSigned?"#E6F4ED":"#FDF6E3",border:`2px solid ${tenantSigned?"#4A9B6F":"#D4A853"}`,borderRadius:14,padding:18,marginBottom:20,cursor:"pointer"}} onClick={()=>setTenantSigned(v=>!v)}>
-            <div style={{display:"flex",alignItems:"flex-start",gap:14}}>
-              <div style={{width:28,height:28,borderRadius:8,border:`2px solid ${tenantSigned?"#4A9B6F":"#D4A853"}`,background:tenantSigned?"#4A9B6F":"white",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:18,color:"white",fontWeight:700}}>
-                {tenantSigned?"✓":""}
-              </div>
-              <div>
-                <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>✍️ Firma del inquilino: {form.tenantName}</div>
-                <div style={{fontSize:13,color:"var(--warm)"}}>{t.tenantConfirm}</div>
-              </div>
-            </div>
-          </div>
-          <div style={{display:"flex",gap:10}}>
-            <button className="btn btn-o" onClick={()=>setStep(1)}>← Volver</button>
-            <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={!tenantSigned||saving}>
-              {saving?"📄 Generando contrato...":"✅ Firmar y descargar contrato"}
-            </button>
-          </div>
-        </>
-      )}
+        </div>
+      </>}
     </div>
   );
 }
-
 function StatusBadge({status,t}){
   const map={"Pendiente":{bg:"#FDECEA",color:"#D94F3D",label:t?.pending||"Pendiente"},"En revisión":{bg:"#FDF6E3",color:"#D4A853",label:t?.inReview||"En revisión"},"Resuelto":{bg:"#E6F4ED",color:"#4A9B6F",label:t?.resolved||"Resuelto"}};
   const s=map[status]||{bg:"#F0ECE8",color:"#8C7B6E",label:status};
