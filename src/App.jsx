@@ -572,6 +572,12 @@ export default function App() {
     await addDoc(collection(db,"contracts",user.uid,"files"),{...contractInfo,createdAt:serverTimestamp()});
   }
 
+  async function deleteContract(contractId){
+    const {deleteDoc} = await import("firebase/firestore");
+    await deleteDoc(doc(db,"contracts",user.uid,"files",contractId));
+    showToast("🗑️ Contrato eliminado");
+  }
+
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
   const persist=async(ref,data)=>{setSaving(true);await updateDoc(ref,data);setSaving(false);};
 
@@ -660,7 +666,7 @@ export default function App() {
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
       if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
-      if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onDownload={(c)=>generateContractDocx(c)}/>;
+      if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -1507,7 +1513,7 @@ function DocumentsPage({t,tenants,documents,onGenerate}){
   );
 }
 
-function ContractsPage({t,contracts,onNew,onDownload}){
+function ContractsPage({t,contracts,onNew,onDownload,onDelete}){
   const byYear={};
   contracts.forEach(c=>{
     const y=c.year||c.signYear||"Sin año";
@@ -1536,6 +1542,7 @@ function ContractsPage({t,contracts,onNew,onDownload}){
                   </div>
                 </div>
                 <button className="btn btn-o btn-sm" onClick={()=>onDownload(c)}>📥 {t.downloadDoc}</button>
+                <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar este contrato?"))onDelete(c.id);}}>🗑️</button>
               </div>
             ))}
           </div>
