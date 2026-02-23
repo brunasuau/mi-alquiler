@@ -648,7 +648,8 @@ export default function App() {
         joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
         payments:{},costs:[],maintenance:[],lang:"es"
       });
-      setModal(null);showToast("✅ Inquilino creado");
+      showToast("✅ Inquilino creado");
+      return tenantRef.id;
     }catch(e){showToast("❌ Error: "+e.message);}
   }
 
@@ -678,13 +679,12 @@ export default function App() {
   const renderModal=()=>{
     if(!modal)return null;
     if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})} contracts={contracts} onUploadContract={()=>setModal({type:"upload-contract-tenant",id:modal.id})}/>;}
-    if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant}/>;
+    if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
     if(modal.type==="upload-contract-tenant"){
-      const ten=tenants.find(x=>x.id===modal.id);
+      const ten=modal.prefillData||tenants.find(x=>x.id===modal.id);
       return<UploadContractModal t={t} onClose={()=>setModal(null)} prefill={ten} onSave={async(data)=>{
-        const tenantRef={id:modal.id};
         await saveContract({...data,year:data.signYear||new Date().getFullYear(),date:today(),tenantUid:modal.id});
         showToast("✅ Contrato guardado");
       }}/>;
@@ -1397,26 +1397,48 @@ function EditTenantModal({t,tenant,onClose,onSave}){
   );
 }
 
-function NewTenantModal({t,onClose,onSave}){
-  const [form,setForm]=useState({name:"",unit:"",phone:"",rent:"",email:"",password:"",contractStart:"",contractEnd:""});
+function NewTenantModal({t,onClose,onSave,onAddContract}){
+  const [form,setForm]=useState({name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:""});
+  const [saved,setSaved]=useState(false);
+  const [savedId,setSavedId]=useState(null);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  const handleSave=async()=>{
+    const id=await onSave(form);
+    setSavedId(id);
+    setSaved(true);
+  };
+
   return(
     <div className="modal">
       <div className="modal-hd"><h3>➕ {t.newTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-      <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
-      <div className="gr2">
-        <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
-        <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
-      </div>
-      <div className="fg"><label>{t.rent}</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
-      <div className="gr2">
-        <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
-        <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
-      </div>
-      <hr/>
-      <div className="fg"><label>{t.email} (acceso)</label><input type="email" value={form.email} onChange={e=>set("email",e.target.value)}/></div>
-      <div className="fg"><label>{t.password}</label><input type="password" value={form.password} onChange={e=>set("password",e.target.value)}/></div>
-      <button className="btn btn-p btn-full" onClick={()=>onSave(form)}>{t.createAccess}</button>
+      {!saved?<>
+        <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
+        <div className="gr2">
+          <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
+          <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+        </div>
+        <div className="fg"><label>{t.rent} €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
+        <div className="gr2">
+          <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
+          <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
+        </div>
+        <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.name||!form.unit||!form.rent}>
+          ✅ Crear inquilino
+        </button>
+      </>:<>
+        <div style={{textAlign:"center",padding:"16px 0"}}>
+          <div style={{fontSize:48,marginBottom:10}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,marginBottom:6}}>{form.name} creado</h3>
+          <p style={{color:"var(--warm)",fontSize:13,marginBottom:20}}>El inquilino ya aparece en la lista.</p>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <button className="btn btn-p" onClick={()=>{onAddContract(savedId,form);onClose();}}>
+              📝 Añadir contrato
+            </button>
+            <button className="btn btn-o" onClick={onClose}>Cerrar</button>
+          </div>
+        </div>
+      </>}
     </div>
   );
 }
