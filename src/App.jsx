@@ -666,7 +666,7 @@ export default function App() {
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
       if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
-      if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
+      if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -681,6 +681,18 @@ export default function App() {
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
+    if(modal.type==="upload-contract")return<UploadContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
+      const tenantRef=doc(collection(db,"users"));
+      await setDoc(tenantRef,{
+        name:data.tenantName,unit:data.unit,phone:data.phone||"",
+        rent:parseFloat(data.rent)||0,email:data.email||"",role:"tenant",
+        joined:today(),contractStart:data.contractStartISO||"",
+        contractEnd:data.contractEndISO||"",
+        payments:{},costs:[],maintenance:[],lang:"es"
+      });
+      await saveContract({...data,year:data.signYear||new Date().getFullYear(),date:today(),tenantUid:tenantRef.id});
+      showToast("✅ Inquilino y contrato guardados");
+    }}/>;
     if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
       const year=data.signYear;
       try{
@@ -1513,7 +1525,7 @@ function DocumentsPage({t,tenants,documents,onGenerate}){
   );
 }
 
-function ContractsPage({t,contracts,onNew,onDownload,onDelete}){
+function ContractsPage({t,contracts,onNew,onUpload,onDownload,onDelete}){
   const byYear={};
   contracts.forEach(c=>{
     const y=c.year||c.signYear||"Sin año";
@@ -1525,7 +1537,10 @@ function ContractsPage({t,contracts,onNew,onDownload,onDelete}){
     <div>
       <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div><h2>📝 {t.contracts}</h2><p>{contracts.length} contratos</p></div>
-        <button className="btn btn-p" onClick={onNew}>➕ {t.newContract}</button>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o" onClick={onUpload}>📤 Subir contrato firmado</button>
+          <button className="btn btn-p" onClick={onNew}>➕ {t.newContract}</button>
+        </div>
       </div>
       {contracts.length===0
         ?<div className="card"><p style={{color:"var(--warm)",textAlign:"center",padding:20}}>📂 {t.noContracts}</p></div>
@@ -1547,6 +1562,183 @@ function ContractsPage({t,contracts,onNew,onDownload,onDelete}){
             ))}
           </div>
         ))}
+    </div>
+  );
+}
+
+function UploadContractModal({t,onClose,onSave}){
+  const [step,setStep]=useState(1); // 1=subir PDF 2=revisar datos 3=confirmado
+  const [loading,setLoading]=useState(false);
+  const [pdfBase64,setPdfBase64]=useState(null);
+  const [pdfName,setPdfName]=useState("");
+  const [form,setForm]=useState({
+    unit:"",tenantName:"",tenantDni:"",tenantAddress:"",phone:"",email:"",rent:"",
+    signDay:"",signMonth:"",signYear:"",
+    startDay:"",startMonth:"",startYear:"",
+    endDay:"",endMonth:"",endYear:"",
+    contractStartISO:"",contractEndISO:"",
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const toISO=(day,month,year)=>{const idx=monthNames.indexOf((month||"").toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
+
+  const handleFile=async(e)=>{
+    const file=e.target.files[0];
+    if(!file)return;
+    setPdfName(file.name);
+    const reader=new FileReader();
+    reader.onload=()=>setPdfBase64(reader.result.split(",")[1]);
+    reader.readAsDataURL(file);
+  };
+
+  const analyzeContract=async()=>{
+    if(!pdfBase64){alert("Sube primero el PDF");return;}
+    setLoading(true);
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",
+          max_tokens:1000,
+          messages:[{role:"user",content:[
+            {type:"document",source:{type:"base64",media_type:"application/pdf",data:pdfBase64}},
+            {type:"text",text:`Extrae los datos de este contrato de arrendamiento y devuelve SOLO un JSON sin texto extra:
+{
+  "tenantName": "nombre completo del arrendatario",
+  "tenantDni": "DNI del arrendatario",
+  "tenantAddress": "domicilio del arrendatario",
+  "phone": "teléfono si aparece",
+  "email": "email si aparece",
+  "unit": "piso, habitación o local arrendado",
+  "rent": "importe mensual solo número",
+  "signDay": "día de firma",
+  "signMonth": "mes de firma en minúsculas",
+  "signYear": "año de firma",
+  "startDay": "día inicio contrato",
+  "startMonth": "mes inicio en minúsculas",
+  "startYear": "año inicio",
+  "endDay": "día fin contrato",
+  "endMonth": "mes fin en minúsculas",
+  "endYear": "año fin"
+}`}
+          ]}]
+        })
+      });
+      const data=await res.json();
+      const text=data.content?.find(c=>c.type==="text")?.text||"{}";
+      const clean=text.replace(/```json|```/g,"").trim();
+      const parsed=JSON.parse(clean);
+      setForm(f=>({...f,...parsed,
+        contractStartISO:toISO(parsed.startDay,parsed.startMonth,parsed.startYear),
+        contractEndISO:toISO(parsed.endDay,parsed.endMonth,parsed.endYear),
+      }));
+      setStep(2);
+    }catch(e){alert("Error leyendo el PDF: "+e.message);}
+    setLoading(false);
+  };
+
+  const handleSave=async()=>{
+    const data={...form,
+      contractStartISO:toISO(form.startDay,form.startMonth,form.startYear),
+      contractEndISO:toISO(form.endDay,form.endMonth,form.endYear),
+    };
+    await onSave(data);
+    setStep(3);
+  };
+
+  const bar=(active,total)=>(
+    <div style={{display:"flex",gap:6,marginBottom:18}}>
+      {Array.from({length:total},(_,i)=>(
+        <div key={i} style={{flex:1,height:4,borderRadius:4,background:i<active?"var(--terra)":"var(--border)"}}/>
+      ))}
+    </div>
+  );
+
+  return(
+    <div className="modal" style={{maxWidth:560}}>
+      {step===1&&<>
+        <div className="modal-hd"><h3>📤 Subir contrato firmado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(1,3)}
+        <div style={{background:"var(--cream)",borderRadius:14,padding:24,textAlign:"center",marginBottom:20}}>
+          <div style={{fontSize:48,marginBottom:12}}>📄</div>
+          <p style={{fontSize:14,color:"var(--warm)",marginBottom:16}}>Sube el PDF del contrato ya firmado.<br/>La app leerá los datos automáticamente.</p>
+          <label style={{display:"inline-block",padding:"10px 20px",background:"var(--terra)",color:"white",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:14}}>
+            📎 Seleccionar PDF
+            <input type="file" accept=".pdf" onChange={handleFile} style={{display:"none"}}/>
+          </label>
+          {pdfName&&<p style={{marginTop:12,fontSize:13,color:"var(--sage)",fontWeight:600}}>✅ {pdfName}</p>}
+        </div>
+        <button className="btn btn-p btn-full" onClick={analyzeContract} disabled={!pdfBase64||loading}>
+          {loading?"🔍 Leyendo contrato...":"🤖 Analizar con IA →"}
+        </button>
+      </>}
+
+      {step===2&&<>
+        <div className="modal-hd"><h3>✏️ Revisa los datos</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(2,3)}
+        <p style={{fontSize:13,color:"var(--warm)",marginBottom:16}}>La IA ha extraído estos datos. Revisa y corrige si hace falta.</p>
+        <div className="fg"><label>Piso / Habitación</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
+        <div className="gr2">
+          <div className="fg"><label>Nombre inquilino</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/></div>
+          <div className="fg"><label>DNI</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)}/></div>
+        </div>
+        <div className="fg"><label>Domicilio</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)}/></div>
+        <div className="gr2">
+          <div className="fg"><label>Teléfono</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+          <div className="fg"><label>Alquiler €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
+        </div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas</div>
+        <div className="gr2">
+          <div className="fg"><label>Firma</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
+              <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+            </div>
+          </div>
+          <div className="fg"><label>Inicio</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
+              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
+              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
+            </div>
+          </div>
+        </div>
+        <div className="fg"><label>Fin</label>
+          <div style={{display:"flex",gap:4}}>
+            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)}/>
+            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)}/>
+            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,marginTop:4}}>
+          <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
+          <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={!form.tenantName||!form.unit}>
+            ✅ Confirmar y crear inquilino
+          </button>
+        </div>
+      </>}
+
+      {step===3&&<>
+        <div className="modal-hd"><h3>✅ ¡Listo!</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(3,3)}
+        <div style={{textAlign:"center",padding:"20px 0"}}>
+          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:8}}>Contrato guardado</h3>
+          <p style={{color:"var(--warm)",fontSize:14,marginBottom:20}}>
+            <strong>{form.tenantName}</strong> ya aparece en Inquilinos.<br/>El contrato está guardado en Contratos.
+          </p>
+          <div style={{background:"var(--cream)",borderRadius:12,padding:14,textAlign:"left",fontSize:13,marginBottom:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Piso</span><strong>{form.unit}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.tenantName}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
+          </div>
+          <button className="btn btn-o" onClick={onClose}>Cerrar</button>
+        </div>
+      </>}
     </div>
   );
 }
