@@ -1567,85 +1567,28 @@ function ContractsPage({t,contracts,onNew,onUpload,onDownload,onDelete}){
 }
 
 function UploadContractModal({t,onClose,onSave}){
-  const [step,setStep]=useState(1); // 1=subir PDF 2=revisar datos 3=confirmado
-  const [loading,setLoading]=useState(false);
-  const [pdfBase64,setPdfBase64]=useState(null);
+  const [step,setStep]=useState(1);
   const [pdfName,setPdfName]=useState("");
+  const [saving,setSaving]=useState(false);
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const now=new Date();
   const [form,setForm]=useState({
     unit:"",tenantName:"",tenantDni:"",tenantAddress:"",phone:"",email:"",rent:"",
-    signDay:"",signMonth:"",signYear:"",
-    startDay:"",startMonth:"",startYear:"",
+    signDay:"",signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
+    startDay:"1",startMonth:monthNames[now.getMonth()],startYear:String(now.getFullYear()),
     endDay:"",endMonth:"",endYear:"",
-    contractStartISO:"",contractEndISO:"",
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-
-  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
   const toISO=(day,month,year)=>{const idx=monthNames.indexOf((month||"").toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
 
-  const handleFile=async(e)=>{
-    const file=e.target.files[0];
-    if(!file)return;
-    setPdfName(file.name);
-    const reader=new FileReader();
-    reader.onload=()=>setPdfBase64(reader.result.split(",")[1]);
-    reader.readAsDataURL(file);
-  };
-
-  const analyzeContract=async()=>{
-    if(!pdfBase64){alert("Sube primero el PDF");return;}
-    setLoading(true);
-    try{
-      const res=await fetch("https://api.anthropic.com/v1/messages",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-20250514",
-          max_tokens:1000,
-          messages:[{role:"user",content:[
-            {type:"document",source:{type:"base64",media_type:"application/pdf",data:pdfBase64}},
-            {type:"text",text:`Extrae los datos de este contrato de arrendamiento y devuelve SOLO un JSON sin texto extra:
-{
-  "tenantName": "nombre completo del arrendatario",
-  "tenantDni": "DNI del arrendatario",
-  "tenantAddress": "domicilio del arrendatario",
-  "phone": "teléfono si aparece",
-  "email": "email si aparece",
-  "unit": "piso, habitación o local arrendado",
-  "rent": "importe mensual solo número",
-  "signDay": "día de firma",
-  "signMonth": "mes de firma en minúsculas",
-  "signYear": "año de firma",
-  "startDay": "día inicio contrato",
-  "startMonth": "mes inicio en minúsculas",
-  "startYear": "año inicio",
-  "endDay": "día fin contrato",
-  "endMonth": "mes fin en minúsculas",
-  "endYear": "año fin"
-}`}
-          ]}]
-        })
-      });
-      const data=await res.json();
-      const text=data.content?.find(c=>c.type==="text")?.text||"{}";
-      const clean=text.replace(/```json|```/g,"").trim();
-      const parsed=JSON.parse(clean);
-      setForm(f=>({...f,...parsed,
-        contractStartISO:toISO(parsed.startDay,parsed.startMonth,parsed.startYear),
-        contractEndISO:toISO(parsed.endDay,parsed.endMonth,parsed.endYear),
-      }));
-      setStep(2);
-    }catch(e){alert("Error leyendo el PDF: "+e.message);}
-    setLoading(false);
-  };
-
   const handleSave=async()=>{
-    const data={...form,
+    setSaving(true);
+    await onSave({...form,
       contractStartISO:toISO(form.startDay,form.startMonth,form.startYear),
       contractEndISO:toISO(form.endDay,form.endMonth,form.endYear),
-    };
-    await onSave(data);
-    setStep(3);
+    });
+    setSaving(false);
+    setStep(2);
   };
 
   const bar=(active,total)=>(
@@ -1660,39 +1603,35 @@ function UploadContractModal({t,onClose,onSave}){
     <div className="modal" style={{maxWidth:560}}>
       {step===1&&<>
         <div className="modal-hd"><h3>📤 Subir contrato firmado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(1,3)}
-        <div style={{background:"var(--cream)",borderRadius:14,padding:24,textAlign:"center",marginBottom:20}}>
-          <div style={{fontSize:48,marginBottom:12}}>📄</div>
-          <p style={{fontSize:14,color:"var(--warm)",marginBottom:16}}>Sube el PDF del contrato ya firmado.<br/>La app leerá los datos automáticamente.</p>
-          <label style={{display:"inline-block",padding:"10px 20px",background:"var(--terra)",color:"white",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:14}}>
-            📎 Seleccionar PDF
-            <input type="file" accept=".pdf" onChange={handleFile} style={{display:"none"}}/>
-          </label>
-          {pdfName&&<p style={{marginTop:12,fontSize:13,color:"var(--sage)",fontWeight:600}}>✅ {pdfName}</p>}
-        </div>
-        <button className="btn btn-p btn-full" onClick={analyzeContract} disabled={!pdfBase64||loading}>
-          {loading?"🔍 Leyendo contrato...":"🤖 Analizar con IA →"}
-        </button>
-      </>}
+        {bar(1,2)}
+        <p style={{fontSize:13,color:"var(--warm)",marginBottom:16}}>Introduce los datos del contrato firmado.</p>
 
-      {step===2&&<>
-        <div className="modal-hd"><h3>✏️ Revisa los datos</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(2,3)}
-        <p style={{fontSize:13,color:"var(--warm)",marginBottom:16}}>La IA ha extraído estos datos. Revisa y corrige si hace falta.</p>
-        <div className="fg"><label>Piso / Habitación</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
-        <div className="gr2">
-          <div className="fg"><label>Nombre inquilino</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/></div>
-          <div className="fg"><label>DNI</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)}/></div>
+        <div className="fg"><label>Piso / Habitación / Trastero</label>
+          <input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Trastero 7, Piso 1..."/>
         </div>
-        <div className="fg"><label>Domicilio</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)}/></div>
         <div className="gr2">
-          <div className="fg"><label>Teléfono</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
-          <div className="fg"><label>Alquiler €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
+          <div className="fg"><label>Nombre completo inquilino</label>
+            <input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/>
+          </div>
+          <div className="fg"><label>DNI / NIE</label>
+            <input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/>
+          </div>
+        </div>
+        <div className="fg"><label>Domicilio del inquilino</label>
+          <input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Teléfono</label>
+            <input value={form.phone} onChange={e=>set("phone",e.target.value)}/>
+          </div>
+          <div className="fg"><label>Alquiler €/mes</label>
+            <input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/>
+          </div>
         </div>
         <hr/>
-        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas</div>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas del contrato</div>
         <div className="gr2">
-          <div className="fg"><label>Firma</label>
+          <div className="fg"><label>Fecha de firma</label>
             <div style={{display:"flex",gap:4}}>
               <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
               <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
@@ -1707,33 +1646,38 @@ function UploadContractModal({t,onClose,onSave}){
             </div>
           </div>
         </div>
-        <div className="fg"><label>Fin</label>
+        <div className="fg"><label>Fin del contrato</label>
           <div style={{display:"flex",gap:4}}>
-            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)}/>
-            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)}/>
-            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
+            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)} placeholder="día"/>
+            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)} placeholder="mes"/>
+            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)} placeholder="año"/>
           </div>
         </div>
-        <div style={{display:"flex",gap:8,marginTop:4}}>
-          <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
-          <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={!form.tenantName||!form.unit}>
-            ✅ Confirmar y crear inquilino
-          </button>
-        </div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Adjuntar PDF (opcional)</div>
+        <label style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",background:"var(--cream)",borderRadius:10,cursor:"pointer",marginBottom:16}}>
+          <span style={{fontSize:20}}>📎</span>
+          <span style={{fontSize:13,color:"var(--warm)"}}>{pdfName||"Seleccionar PDF del contrato"}</span>
+          <input type="file" accept=".pdf" onChange={e=>setPdfName(e.target.files[0]?.name||"")} style={{display:"none"}}/>
+        </label>
+        <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.unit||!form.tenantName||!form.rent||saving}>
+          {saving?"⏳ Guardando...":"✅ Guardar contrato y crear inquilino"}
+        </button>
       </>}
 
-      {step===3&&<>
+      {step===2&&<>
         <div className="modal-hd"><h3>✅ ¡Listo!</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(3,3)}
+        {bar(2,2)}
         <div style={{textAlign:"center",padding:"20px 0"}}>
           <div style={{fontSize:56,marginBottom:12}}>🎉</div>
-          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:8}}>Contrato guardado</h3>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:8}}>¡Contrato guardado!</h3>
           <p style={{color:"var(--warm)",fontSize:14,marginBottom:20}}>
             <strong>{form.tenantName}</strong> ya aparece en Inquilinos.<br/>El contrato está guardado en Contratos.
           </p>
           <div style={{background:"var(--cream)",borderRadius:12,padding:14,textAlign:"left",fontSize:13,marginBottom:20}}>
             <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Piso</span><strong>{form.unit}</strong></div>
             <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.tenantName}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
             <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
           </div>
           <button className="btn btn-o" onClick={onClose}>Cerrar</button>
