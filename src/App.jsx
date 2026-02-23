@@ -677,10 +677,18 @@ export default function App() {
 
   const renderModal=()=>{
     if(!modal)return null;
-    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})}/>;}
+    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})} contracts={contracts} onUploadContract={()=>setModal({type:"upload-contract-tenant",id:modal.id})}/>;}
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
+    if(modal.type==="upload-contract-tenant"){
+      const ten=tenants.find(x=>x.id===modal.id);
+      return<UploadContractModal t={t} onClose={()=>setModal(null)} prefill={ten} onSave={async(data)=>{
+        const tenantRef={id:modal.id};
+        await saveContract({...data,year:data.signYear||new Date().getFullYear(),date:today(),tenantUid:modal.id});
+        showToast("✅ Contrato guardado");
+      }}/>;
+    }
     if(modal.type==="upload-contract")return<UploadContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
       const tenantRef=doc(collection(db,"users"));
       await setDoc(tenantRef,{
@@ -1262,7 +1270,7 @@ function TenantMaintenance({t,profile,onSend}){
   );
 }
 
-function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,onEdit}){
+function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,onEdit,onUploadContract,contracts}){
   const now=new Date();
   const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
   const startYear=2024;
@@ -1303,6 +1311,21 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,on
         <div><div className="pf-lbl">{t.contractStart}</div><div className="pf-val">{tenant.contractStart||"—"}</div></div>
         <div><div className="pf-lbl">{t.contractEnd}</div><div className="pf-val">{tenant.contractEnd||"—"}</div></div>
       </div>
+      <hr/>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>📝 Contratos</div>
+      {(contracts||[]).filter(c=>c.tenantUid===tenant.id).length===0
+        ?<p style={{fontSize:13,color:"var(--warm)",marginBottom:8}}>No hay contratos adjuntos</p>
+        :(contracts||[]).filter(c=>c.tenantUid===tenant.id).map(c=>(
+          <div key={c.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+            <span style={{fontSize:22}}>📄</span>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,fontSize:13}}>{c.unit||tenant.unit}</div>
+              <div style={{fontSize:11,color:"var(--warm)"}}>{c.startDay}/{c.startMonth}/{c.startYear} → {c.endDay}/{c.endMonth}/{c.endYear} · {c.rent}€/mes</div>
+            </div>
+            <button className="btn btn-o btn-sm" onClick={()=>generateContractDocx(c)}>📥</button>
+          </div>
+        ))}
+      <button className="btn btn-o" style={{marginBottom:16,marginTop:8}} onClick={onUploadContract}>➕ Adjuntar contrato</button>
       <hr/>
       <div className="serif" style={{fontSize:16,marginBottom:12}}>{t.paymentHistory}</div>
       {months.map(m=>{const p=(tenant.payments||{})[m];return(<div key={m} className="cr"><div className="cn">{m}</div><div style={{display:"flex",alignItems:"center",gap:8}}><span className="badge" style={p.paid?{background:"#E6F4ED",color:"#4A9B6F"}:{background:"#FDECEA",color:"#D94F3D"}}>{p.paid?`✓ ${p.date}`:"✗ Pendiente"}</span><button className="btn btn-o btn-sm" onClick={()=>onToggle(tenant.id,m)}>{p.paid?t.revert:t.markPaid}</button></div></div>);})}
@@ -1566,17 +1589,23 @@ function ContractsPage({t,contracts,onNew,onUpload,onDownload,onDelete}){
   );
 }
 
-function UploadContractModal({t,onClose,onSave}){
+function UploadContractModal({t,onClose,onSave,prefill}){
   const [step,setStep]=useState(1);
   const [pdfName,setPdfName]=useState("");
   const [saving,setSaving]=useState(false);
   const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
   const now=new Date();
   const [form,setForm]=useState({
-    unit:"",tenantName:"",tenantDni:"",tenantAddress:"",phone:"",email:"",rent:"",
+    unit:prefill?.unit||"",tenantName:prefill?.name||"",tenantDni:prefill?.dni||"",
+    tenantAddress:prefill?.address||"",phone:prefill?.phone||"",email:prefill?.email||"",
+    rent:prefill?.rent||"",
     signDay:"",signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
-    startDay:"1",startMonth:monthNames[now.getMonth()],startYear:String(now.getFullYear()),
-    endDay:"",endMonth:"",endYear:"",
+    startDay:prefill?.contractStart?.split("-")[2]||"1",
+    startMonth:prefill?.contractStart?monthNames[parseInt(prefill.contractStart.split("-")[1])-1]:monthNames[now.getMonth()],
+    startYear:prefill?.contractStart?.split("-")[0]||String(now.getFullYear()),
+    endDay:prefill?.contractEnd?.split("-")[2]||"",
+    endMonth:prefill?.contractEnd?monthNames[parseInt(prefill.contractEnd.split("-")[1])-1]:"",
+    endYear:prefill?.contractEnd?.split("-")[0]||"",
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const toISO=(day,month,year)=>{const idx=monthNames.indexOf((month||"").toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
