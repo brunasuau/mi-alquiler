@@ -897,27 +897,93 @@ function Dashboard({t,tenants,onSelect}){
 }
 
 function Tenants({t,tenants,onSelect,onNew,onEdit}){
+  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const groups={};
+  buildings.forEach(b=>groups[b]=[]);
+  groups["Sin nave asignada"]=[];
+  tenants.forEach(ten=>{
+    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave asignada";
+    groups[b].push(ten);
+  });
+  const allGroups=[...buildings,"Sin nave asignada"].filter(b=>groups[b].length>0);
+  const [openBuilding,setOpenBuilding]=useState(allGroups[0]||null);
+  const [verTodo,setVerTodo]=useState(false);
+
+  const TenantRow=({ten})=>(
+    <div className="t-row">
+      <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
+      <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
+        <strong>{ten.name}</strong>
+        <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
+      </div>
+      <div style={{textAlign:"right",marginRight:8}}>
+        <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
+      </div>
+      <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
+      <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
+    </div>
+  );
+
   return(
     <div>
       <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div><h2>{t.tenants}</h2><p>{tenants.length} {t.activeTenants.toLowerCase()}</p></div>
-        <button className="btn btn-p" onClick={onNew}>➕ {t.newTenant}</button>
+        <div style={{display:"flex",gap:8}}>
+          <button className={`btn btn-sm ${verTodo?"btn-p":"btn-o"}`} onClick={()=>setVerTodo(v=>!v)}>
+            {verTodo?"🏢 Por naves":"🌐 Ver todo"}
+          </button>
+          <button className="btn btn-p" onClick={onNew}>➕ {t.newTenant}</button>
+        </div>
       </div>
-      {tenants.length===0?<div className="card"><p style={{color:"var(--warm)",fontSize:14,textAlign:"center",padding:20}}>{t.noTenants}</p></div>:
-        tenants.map(ten=>(
-          <div key={ten.id} className="t-row">
-            <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
-            <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
-              <strong>{ten.name}</strong>
-              <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
+
+      {tenants.length===0
+        ?<div className="card"><p style={{color:"var(--warm)",fontSize:14,textAlign:"center",padding:20}}>{t.noTenants}</p></div>
+        :verTodo
+          ?<div style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+            <div style={{background:"var(--terra)",color:"white",padding:"12px 16px"}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🌐 Todos los inquilinos</div>
+              <div style={{fontSize:12,opacity:.85,marginTop:2}}>{tenants.length} inquilinos · {tenants.reduce((s,ten)=>s+(ten.rent||0),0)}€/mes</div>
             </div>
-            <div style={{textAlign:"right",marginRight:8}}>
-              <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
+            <div style={{padding:"0 4px",background:"white"}}>
+              {tenants.map(ten=>(
+                <div key={ten.id} className="t-row">
+                  <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
+                  <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
+                    <strong>{ten.name}</strong>
+                    <span style={{fontSize:10,color:getBuildingColor(ten.building||""),fontWeight:600}}>{ten.building||"Sin nave"}</span>
+                    <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
+                  </div>
+                  <div style={{textAlign:"right",marginRight:8}}>
+                    <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
+                  </div>
+                  <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
+                  <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
+                </div>
+              ))}
             </div>
-            <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
-            <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
           </div>
-        ))}
+          :allGroups.map(building=>{
+            const isOpen=openBuilding===building;
+            const totalRent=groups[building].reduce((s,ten)=>s+(ten.rent||0),0);
+            return(
+              <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <div style={{background:getBuildingColor(building),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:building)}>
+                  <div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {building}</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{groups[building].length} inquilino{groups[building].length!==1?"s":""} · {totalRent}€/mes</div>
+                  </div>
+                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
+                </div>
+                {isOpen&&(
+                  <div style={{padding:"0 4px",background:"white"}}>
+                    {groups[building].map(ten=><TenantRow key={ten.id} ten={ten}/>)}
+                  </div>
+                )}
+              </div>
+            );
+          })
+      }
     </div>
   );
 }
