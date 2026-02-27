@@ -653,7 +653,7 @@ export default function App() {
     showToast("🗑️ Coste eliminado");
   }
 
-  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes}){
+  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes,rentRecibo,rentFactura}){
     try{
       const tenantRef=doc(collection(db,"users"));
       await setDoc(tenantRef,{
@@ -661,6 +661,8 @@ export default function App() {
         joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
         docType:docType||"recibo",building:building||"",
         payFreq:payFreq||"mensual",
+        rentRecibo:docType==="ambos"?parseFloat(rentRecibo)||0:0,
+        rentFactura:docType==="ambos"?parseFloat(rentFactura)||0:0,
         fianza:fianza||"no",fianzaAmount:fianza==="si"?parseFloat(fianzaAmount)||0:0,
         notes:notes||"",
         payments:{},costs:[],maintenance:[],lang:"es"
@@ -1506,6 +1508,16 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,on
             <button className={`btn btn-sm ${tenant.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","factura")}>🧾 Factura</button>
             <button className={`btn btn-sm ${tenant.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","ambos")}>🧾 Ambos</button>
           </div>
+          {tenant.docType==="ambos"&&(
+            <div style={{marginTop:8,background:"var(--cream)",borderRadius:10,padding:10,fontSize:13}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span style={{color:"var(--warm)"}}>Importe Recibo</span><strong>{tenant.rentRecibo||0}€</strong>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+                <span style={{color:"var(--warm)"}}>Importe Factura</span><strong>{tenant.rentFactura||0}€</strong>
+              </div>
+            </div>
+          )}
         </div>
         {tenant.notes&&<div style={{gridColumn:"1/-1"}}>
           <div className="pf-lbl">📝 Notas</div>
@@ -1575,7 +1587,8 @@ function EditTenantModal({t,tenant,onClose,onSave}){
     contractStart:tenant?.contractStart||"",contractEnd:tenant?.contractEnd||"",
     building:tenant?.building||"",docType:tenant?.docType||"recibo",
     payFreq:tenant?.payFreq||"mensual",fianza:tenant?.fianza||"no",
-    fianzaAmount:tenant?.fianzaAmount||"",notes:tenant?.notes||""
+    fianzaAmount:tenant?.fianzaAmount||"",notes:tenant?.notes||"",
+    rentRecibo:tenant?.rentRecibo||"",rentFactura:tenant?.rentFactura||""
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(!tenant)return null;
@@ -1611,6 +1624,16 @@ function EditTenantModal({t,tenant,onClose,onSave}){
           <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
           <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
         </div>
+        {form.docType==="ambos"&&(
+          <div style={{marginTop:10,background:"var(--cream)",borderRadius:10,padding:12}}>
+            <p style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Divide el importe entre recibo y factura:</p>
+            <div className="gr2">
+              <div className="fg"><label>Importe Recibo €</label><input type="number" placeholder="0" value={form.rentRecibo||""} onChange={e=>set("rentRecibo",e.target.value)}/></div>
+              <div className="fg"><label>Importe Factura €</label><input type="number" placeholder="0" value={form.rentFactura||""} onChange={e=>set("rentFactura",e.target.value)}/></div>
+            </div>
+            {form.rentRecibo&&form.rentFactura&&<p style={{fontSize:11,marginTop:4,color:"var(--sage)",fontWeight:600}}>Total: {(parseFloat(form.rentRecibo||0)+parseFloat(form.rentFactura||0))}€</p>}
+          </div>
+        )}
       </div>
       <div className="fg">
         <label>📅 Frecuencia de pago</label>
@@ -1686,7 +1709,16 @@ function NewTenantModal({t,onClose,onSave,onAddContract}){
             <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
             <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
           </div>
-          {form.docType==="ambos"&&<p style={{fontSize:11,color:"var(--warm)",marginTop:4}}>Se pedirá nº de recibo y nº de factura al registrar el pago</p>}
+          {form.docType==="ambos"&&(
+            <div style={{marginTop:10,background:"var(--cream)",borderRadius:10,padding:12}}>
+              <p style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Divide el importe total entre recibo y factura:</p>
+              <div className="gr2">
+                <div className="fg"><label>Importe Recibo €</label><input type="number" placeholder="0" value={form.rentRecibo||""} onChange={e=>set("rentRecibo",e.target.value)}/></div>
+                <div className="fg"><label>Importe Factura €</label><input type="number" placeholder="0" value={form.rentFactura||""} onChange={e=>set("rentFactura",e.target.value)}/></div>
+              </div>
+              {form.rentRecibo&&form.rentFactura&&<p style={{fontSize:11,marginTop:4,color:"var(--sage)",fontWeight:600}}>Total: {(parseFloat(form.rentRecibo||0)+parseFloat(form.rentFactura||0))}€</p>}
+            </div>
+          )}
         </div>
         <div className="fg">
           <label>📅 Frecuencia de pago</label>
