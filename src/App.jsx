@@ -932,6 +932,7 @@ function Finances({t,tenants,onToggle,onAddCost,onDeleteCost}){
   const [selYear,setSelYear]=useState(now.getFullYear());
   const [tab,setTab]=useState("pagos"); // pagos | gastos | graficos
   const [openBuilding,setOpenBuilding]=useState(null);
+  const [verTodo,setVerTodo]=useState(false);
   const years=Array.from({length:15},(_,i)=>startYear+i);
   const monthsOfYear=monthNames.map(m=>`${m} ${selYear}`);
   const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
@@ -964,12 +965,19 @@ function Finances({t,tenants,onToggle,onAddCost,onDeleteCost}){
         </div>
       </div>
 
-      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
-        {["pagos","gastos","graficos"].map(tb=>(
-          <button key={tb} className={`chat-tab${tab===tb?" active":""}`} onClick={()=>setTab(tb)}>
-            {tb==="pagos"?"💶 Pagos":tb==="gastos"?"⚡ Gastos":"📊 Gráficos"}
+      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {["pagos","gastos","graficos"].map(tb=>(
+            <button key={tb} className={`chat-tab${tab===tb?" active":""}`} onClick={()=>setTab(tb)}>
+              {tb==="pagos"?"💶 Pagos":tb==="gastos"?"⚡ Gastos":"📊 Gráficos"}
+            </button>
+          ))}
+        </div>
+        {(tab==="pagos"||tab==="gastos")&&(
+          <button className={`btn btn-sm ${verTodo?"btn-p":"btn-o"}`} onClick={()=>setVerTodo(v=>!v)}>
+            {verTodo?"🏢 Por naves":"🌐 Ver todo"}
           </button>
-        ))}
+        )}
       </div>
 
       {/* RESUMEN ANUAL */}
@@ -981,7 +989,30 @@ function Finances({t,tenants,onToggle,onAddCost,onDeleteCost}){
       </div>
 
       {/* TAB PAGOS */}
-      {tab==="pagos"&&(
+      {tab==="pagos"&&verTodo&&(
+        <div className="card">
+          <div className="card-title">💶 {t.paymentHistory} · {selYear} — Todas las naves</div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
+              <tbody>
+                {tenants.map(ten=>(
+                  <tr key={ten.id}>
+                    <td><strong>{ten.name}</strong></td>
+                    <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
+                    <td>{ten.unit}</td><td>{ten.rent}€</td>
+                    {monthsOfYear.map(m=>{
+                      const p=(ten.payments||{})[m];
+                      return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {tab==="pagos"&&!verTodo&&(
         <div>
           {buildings.map(b=>{
             const bTenants=getTenantsByBuilding(b);
@@ -1025,7 +1056,30 @@ function Finances({t,tenants,onToggle,onAddCost,onDeleteCost}){
       )}
 
       {/* TAB GASTOS */}
-      {tab==="gastos"&&(
+      {tab==="gastos"&&verTodo&&(
+        <div className="card">
+          <div className="card-title">⚡ {t.costBreakdown} · {selYear} — Todas las naves</div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
+              <tbody>
+                {tenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>(
+                  <tr key={c.id}>
+                    <td>{ten.name}</td>
+                    <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
+                    <td><div>{c.icon} {c.name}</div>{c.nota&&<div style={{fontSize:11,color:"var(--warm)"}}>📝 {c.nota}</div>}</td>
+                    <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>{c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}</span></td>
+                    <td>{c.month}</td><td>{c.amount}€</td>
+                    <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(ten.id,c.id)}>🗑️</button></td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+        </div>
+      )}
+      {tab==="gastos"&&!verTodo&&(
         <div>
           {buildings.map(b=>{
             const bTenants=getTenantsByBuilding(b);
