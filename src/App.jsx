@@ -653,13 +653,13 @@ export default function App() {
     showToast("🗑️ Coste eliminado");
   }
 
-  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType}){
+  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building}){
     try{
       const tenantRef=doc(collection(db,"users"));
       await setDoc(tenantRef,{
         name,unit,phone:phone||"",rent:parseFloat(rent),email:email||"",role:"tenant",
         joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
-        docType:docType||"recibo",
+        docType:docType||"recibo",building:building||"",
         payments:{},costs:[],maintenance:[],lang:"es"
       });
       showToast("✅ Inquilino creado");
@@ -1397,7 +1397,8 @@ function EditTenantModal({t,tenant,onClose,onSave}){
   const [form,setForm]=useState({
     name:tenant?.name||"",unit:tenant?.unit||"",phone:tenant?.phone||"",
     rent:tenant?.rent||"",email:tenant?.email||"",
-    contractStart:tenant?.contractStart||"",contractEnd:tenant?.contractEnd||""
+    contractStart:tenant?.contractStart||"",contractEnd:tenant?.contractEnd||"",
+    building:tenant?.building||""
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(!tenant)return null;
@@ -1405,6 +1406,14 @@ function EditTenantModal({t,tenant,onClose,onSave}){
     <div className="modal">
       <div className="modal-hd"><h3>✏️ {t.editTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
       <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
+      <div className="fg"><label>🏢 Nave / Edificio</label>
+        <select value={form.building} onChange={e=>set("building",e.target.value)}>
+          <option value="">— Sin nave asignada —</option>
+          <option value="C/ Pou 61, Nau A">C/ Pou 61, Nau A</option>
+          <option value="C/ Pou 61, Nau B">C/ Pou 61, Nau B</option>
+          <option value="C/ Pou 61, Nau C">C/ Pou 61, Nau C</option>
+        </select>
+      </div>
       <div className="gr2">
         <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
         <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
@@ -1424,7 +1433,7 @@ function EditTenantModal({t,tenant,onClose,onSave}){
 }
 
 function NewTenantModal({t,onClose,onSave,onAddContract}){
-  const [form,setForm]=useState({name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",docType:"recibo"});
+  const [form,setForm]=useState({name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",docType:"recibo",building:""});
   const [saved,setSaved]=useState(false);
   const [savedId,setSavedId]=useState(null);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
@@ -1440,8 +1449,16 @@ function NewTenantModal({t,onClose,onSave,onAddContract}){
       <div className="modal-hd"><h3>➕ {t.newTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
       {!saved?<>
         <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
+        <div className="fg"><label>🏢 Nave / Edificio</label>
+          <select value={form.building} onChange={e=>set("building",e.target.value)}>
+            <option value="">— Seleccionar nave —</option>
+            <option value="C/ Pou 61, Nau A">C/ Pou 61, Nau A</option>
+            <option value="C/ Pou 61, Nau B">C/ Pou 61, Nau B</option>
+            <option value="C/ Pou 61, Nau C">C/ Pou 61, Nau C</option>
+          </select>
+        </div>
         <div className="gr2">
-          <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
+          <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Trastero 7, Local 2..."/></div>
           <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
         </div>
         <div className="fg"><label>{t.rent} €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
