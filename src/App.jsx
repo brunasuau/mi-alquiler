@@ -626,6 +626,19 @@ export default function App() {
     showToast("✅ Incidencia enviada");
   }
 
+  async function updateTenantField(tenantId,field,value){
+    await persist(doc(db,"users",tenantId),{[field]:value});
+    showToast("✅ Actualizado");
+  }
+
+  async function deleteTenant(tenantId){
+    if(!window.confirm("¿Eliminar este inquilino? Se borrarán todos sus datos."))return;
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"users",tenantId));
+    setModal(null);
+    showToast("🗑️ Inquilino eliminado");
+  }
+
   async function addCost(tenantId,cost){
     const ten=tenants.find(x=>x.id===tenantId);
     const costs=[...(ten.costs||[]),{id:Date.now(),...cost}];
@@ -640,12 +653,13 @@ export default function App() {
     showToast("🗑️ Coste eliminado");
   }
 
-  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd}){
+  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType}){
     try{
       const tenantRef=doc(collection(db,"users"));
       await setDoc(tenantRef,{
         name,unit,phone:phone||"",rent:parseFloat(rent),email:email||"",role:"tenant",
         joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
+        docType:docType||"recibo",
         payments:{},costs:[],maintenance:[],lang:"es"
       });
       showToast("✅ Inquilino creado");
@@ -678,7 +692,7 @@ export default function App() {
 
   const renderModal=()=>{
     if(!modal)return null;
-    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})} contracts={contracts} onUploadContract={()=>setModal({type:"upload-contract-tenant",id:modal.id})}/>;}
+    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})} contracts={contracts} onUploadContract={()=>setModal({type:"upload-contract-tenant",id:modal.id})} onDelete={()=>deleteTenant(modal.id)} onUpdateField={updateTenantField}/>;}
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
@@ -900,6 +914,7 @@ function Tenants({t,tenants,onSelect,onNew,onEdit}){
             <div style={{textAlign:"right",marginRight:8}}>
               <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
             </div>
+            <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
             <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
           </div>
         ))}
@@ -1270,7 +1285,7 @@ function TenantMaintenance({t,profile,onSend}){
   );
 }
 
-function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,onEdit,onUploadContract,contracts}){
+function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,onEdit,onUploadContract,contracts,onDelete,onUpdateField}){
   const now=new Date();
   const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
   const startYear=2024;
@@ -1297,6 +1312,7 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,on
         <h3>{tenant.name}</h3>
         <div style={{display:"flex",gap:8}}>
           <button className="btn btn-o btn-sm" onClick={onEdit}>✏️ {t.editData}</button>
+          <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={onDelete}>🗑️</button>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
       </div>
@@ -1310,6 +1326,16 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,on
         <div><div className="pf-lbl">{t.rent}</div><div className="pf-val">{tenant.rent}€/mes</div></div>
         <div><div className="pf-lbl">{t.contractStart}</div><div className="pf-val">{tenant.contractStart||"—"}</div></div>
         <div><div className="pf-lbl">{t.contractEnd}</div><div className="pf-val">{tenant.contractEnd||"—"}</div></div>
+        <div style={{gridColumn:"1/-1"}}>
+          <div className="pf-lbl">Tipo de documento</div>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button className={`btn btn-sm ${(tenant.docType||"recibo")==="recibo"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","recibo")}>🧾 Recibo</button>
+            <button className={`btn btn-sm ${tenant.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","factura")}>🧾 Factura</button>
+          </div>
+          <div style={{fontSize:11,color:"var(--warm)",marginTop:4}}>
+            {tenant.docType==="factura"?"📋 La factura la harás tú manualmente":"🖨️ El recibo se genera automáticamente"}
+          </div>
+        </div>
       </div>
       <hr/>
       <div className="serif" style={{fontSize:16,marginBottom:12}}>📝 Contratos</div>
@@ -1398,7 +1424,7 @@ function EditTenantModal({t,tenant,onClose,onSave}){
 }
 
 function NewTenantModal({t,onClose,onSave,onAddContract}){
-  const [form,setForm]=useState({name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:""});
+  const [form,setForm]=useState({name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",docType:"recibo"});
   const [saved,setSaved]=useState(false);
   const [savedId,setSavedId]=useState(null);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
@@ -1422,6 +1448,16 @@ function NewTenantModal({t,onClose,onSave,onAddContract}){
         <div className="gr2">
           <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
           <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
+        </div>
+        <div className="fg">
+          <label>Tipo de documento mensual</label>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button className={`btn btn-sm ${form.docType==="recibo"?"btn-p":"btn-o"}`} onClick={()=>set("docType","recibo")}>🧾 Recibo</button>
+            <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
+          </div>
+          <p style={{fontSize:11,color:"var(--warm)",marginTop:4}}>
+            {form.docType==="factura"?"📋 La factura la harás tú manualmente":"🖨️ El recibo se genera automáticamente"}
+          </p>
         </div>
         <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.name||!form.unit||!form.rent}>
           ✅ Crear inquilino
