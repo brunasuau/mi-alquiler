@@ -931,8 +931,12 @@ function Finances({t,tenants,onToggle,onAddCost,onDeleteCost}){
 
   const [selYear,setSelYear]=useState(now.getFullYear());
   const [tab,setTab]=useState("pagos"); // pagos | gastos | graficos
+  const [openBuilding,setOpenBuilding]=useState(null);
   const years=Array.from({length:15},(_,i)=>startYear+i);
   const monthsOfYear=monthNames.map(m=>`${m} ${selYear}`);
+  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+  const getTenantsByBuilding=(b)=>tenants.filter(t=>t.building===b);
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
 
   // Chart data for selected year
   const chartData=monthsOfYear.map(m=>{
@@ -978,53 +982,97 @@ function Finances({t,tenants,onToggle,onAddCost,onDeleteCost}){
 
       {/* TAB PAGOS */}
       {tab==="pagos"&&(
-        <div className="card">
-          <div className="card-title">💶 {t.paymentHistory} · {selYear}</div>
-          <div className="tbl-wrap">
-            <table>
-              <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
-              <tbody>
-                {tenants.map(ten=>(
-                  <tr key={ten.id}>
-                    <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
-                    {monthsOfYear.map(m=>{
-                      const p=(ten.payments||{})[m];
-                      return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <div>
+          {buildings.map(b=>{
+            const bTenants=getTenantsByBuilding(b);
+            if(bTenants.length===0)return null;
+            const isOpen=openBuilding===b;
+            const totalRent=bTenants.reduce((s,t)=>s+(t.rent||0),0);
+            const paidThisMonth=bTenants.filter(t=>{const m=monthsOfYear[now.getMonth()];return(t.payments||{})[m]?.paid;}).length;
+            return(
+              <div key={b} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:b)}>
+                  <div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bTenants.length} inquilinos · {totalRent}€/mes · {paidThisMonth}/{bTenants.length} pagados</div>
+                  </div>
+                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
+                </div>
+                {isOpen&&(
+                  <div style={{padding:8,background:"white"}}>
+                    <div className="tbl-wrap">
+                      <table>
+                        <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
+                        <tbody>
+                          {bTenants.map(ten=>(
+                            <tr key={ten.id}>
+                              <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
+                              {monthsOfYear.map(m=>{
+                                const p=(ten.payments||{})[m];
+                                return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
       {/* TAB GASTOS */}
       {tab==="gastos"&&(
-        <div className="card">
-          <div className="card-title">⚡ {t.costBreakdown} · {selYear}</div>
-          <div className="tbl-wrap">
-            <table>
-              <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
-              <tbody>
-                {tenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>(
-                  <tr key={c.id}>
-                    <td>{ten.name}</td>
-                    <td>
-                      <div>{c.icon} {c.name}</div>
-                      {c.nota&&<div style={{fontSize:11,color:"var(--warm)",marginTop:2}}>📝 {c.nota}</div>}
-                    </td>
-                    <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>
-                      {c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}
-                    </span></td>
-                    <td>{c.month}</td>
-                    <td>{c.amount}€</td>
-                    <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(ten.id,c.id)}>🗑️</button></td>
-                  </tr>
-                )))}
-              </tbody>
-            </table>
-          </div>
+        <div>
+          {buildings.map(b=>{
+            const bTenants=getTenantsByBuilding(b);
+            const bCosts=bTenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>({...c,tenantName:ten.name,tenantId:ten.id})));
+            if(bTenants.length===0)return null;
+            const isOpen=openBuilding===("g_"+b);
+            const totalCosts=bCosts.reduce((s,c)=>s+(c.amount||0),0);
+            return(
+              <div key={b} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:"g_"+b)}>
+                  <div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bCosts.length} gastos · Total: {totalCosts}€</div>
+                  </div>
+                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
+                </div>
+                {isOpen&&(
+                  <div style={{padding:8,background:"white"}}>
+                    {bCosts.length===0
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:12}}>No hay gastos en {selYear}</p>
+                      :<div className="tbl-wrap">
+                        <table>
+                          <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
+                          <tbody>
+                            {bCosts.map(c=>(
+                              <tr key={c.id}>
+                                <td>{c.tenantName}</td>
+                                <td>
+                                  <div>{c.icon} {c.name}</div>
+                                  {c.nota&&<div style={{fontSize:11,color:"var(--warm)",marginTop:2}}>📝 {c.nota}</div>}
+                                </td>
+                                <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>
+                                  {c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}
+                                </span></td>
+                                <td>{c.month}</td>
+                                <td>{c.amount}€</td>
+                                <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(c.tenantId,c.id)}>🗑️</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
           <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
         </div>
       )}
