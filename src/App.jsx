@@ -653,13 +653,16 @@ export default function App() {
     showToast("🗑️ Coste eliminado");
   }
 
-  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building}){
+  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes}){
     try{
       const tenantRef=doc(collection(db,"users"));
       await setDoc(tenantRef,{
         name,unit,phone:phone||"",rent:parseFloat(rent),email:email||"",role:"tenant",
         joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
         docType:docType||"recibo",building:building||"",
+        payFreq:payFreq||"mensual",
+        fianza:fianza||"no",fianzaAmount:fianza==="si"?parseFloat(fianzaAmount)||0:0,
+        notes:notes||"",
         payments:{},costs:[],maintenance:[],lang:"es"
       });
       showToast("✅ Inquilino creado");
@@ -1494,16 +1497,20 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,on
         <div><div className="pf-lbl">{t.rent}</div><div className="pf-val">{tenant.rent}€/mes</div></div>
         <div><div className="pf-lbl">{t.contractStart}</div><div className="pf-val">{tenant.contractStart||"—"}</div></div>
         <div><div className="pf-lbl">{t.contractEnd}</div><div className="pf-val">{tenant.contractEnd||"—"}</div></div>
+        <div><div className="pf-lbl">📅 Frecuencia pago</div><div className="pf-val">{tenant.payFreq||"mensual"}</div></div>
+        <div><div className="pf-lbl">🔒 Fianza</div><div className="pf-val">{tenant.fianza==="si"?`✅ ${tenant.fianzaAmount||0}€`:"❌ No"}</div></div>
         <div style={{gridColumn:"1/-1"}}>
-          <div className="pf-lbl">Tipo de documento</div>
-          <div style={{display:"flex",gap:8,marginTop:6}}>
+          <div className="pf-lbl">🧾 Tipo de documento</div>
+          <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
             <button className={`btn btn-sm ${(tenant.docType||"recibo")==="recibo"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","recibo")}>🧾 Recibo</button>
             <button className={`btn btn-sm ${tenant.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","factura")}>🧾 Factura</button>
-          </div>
-          <div style={{fontSize:11,color:"var(--warm)",marginTop:4}}>
-            {tenant.docType==="factura"?"📋 La factura la harás tú manualmente":"🖨️ El recibo se genera automáticamente"}
+            <button className={`btn btn-sm ${tenant.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","ambos")}>🧾 Ambos</button>
           </div>
         </div>
+        {tenant.notes&&<div style={{gridColumn:"1/-1"}}>
+          <div className="pf-lbl">📝 Notas</div>
+          <div className="pf-val" style={{fontSize:13,whiteSpace:"pre-wrap"}}>{tenant.notes}</div>
+        </div>}
       </div>
       <hr/>
       <div className="serif" style={{fontSize:16,marginBottom:12}}>📝 Contratos</div>
@@ -1566,7 +1573,9 @@ function EditTenantModal({t,tenant,onClose,onSave}){
     name:tenant?.name||"",unit:tenant?.unit||"",phone:tenant?.phone||"",
     rent:tenant?.rent||"",email:tenant?.email||"",
     contractStart:tenant?.contractStart||"",contractEnd:tenant?.contractEnd||"",
-    building:tenant?.building||""
+    building:tenant?.building||"",docType:tenant?.docType||"recibo",
+    payFreq:tenant?.payFreq||"mensual",fianza:tenant?.fianza||"no",
+    fianzaAmount:tenant?.fianzaAmount||"",notes:tenant?.notes||""
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(!tenant)return null;
@@ -1595,13 +1604,48 @@ function EditTenantModal({t,tenant,onClose,onSave}){
         <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
         <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
       </div>
+      <div className="fg">
+        <label>🧾 Tipo de documento</label>
+        <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+          <button className={`btn btn-sm ${form.docType==="recibo"?"btn-p":"btn-o"}`} onClick={()=>set("docType","recibo")}>🧾 Recibo</button>
+          <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
+          <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
+        </div>
+      </div>
+      <div className="fg">
+        <label>📅 Frecuencia de pago</label>
+        <select value={form.payFreq} onChange={e=>set("payFreq",e.target.value)}>
+          <option value="mensual">Mensual</option>
+          <option value="2meses">Cada 2 meses</option>
+          <option value="3meses">Cada 3 meses</option>
+          <option value="4meses">Cada 4 meses</option>
+          <option value="6meses">Cada 6 meses</option>
+        </select>
+      </div>
+      <div className="fg">
+        <label>🔒 Fianza</label>
+        <div style={{display:"flex",gap:8,marginTop:6}}>
+          <button className={`btn btn-sm ${form.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>set("fianza","si")}>✅ Sí</button>
+          <button className={`btn btn-sm ${form.fianza==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("fianza","no")}>❌ No</button>
+        </div>
+        {form.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe €" value={form.fianzaAmount} onChange={e=>set("fianzaAmount",e.target.value)}/>}
+      </div>
+      <div className="fg">
+        <label>📝 Notas</label>
+        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} rows={3} style={{width:"100%",padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/>
+      </div>
       <button className="btn btn-p btn-full" onClick={()=>onSave(tenant.id,form)}>💾 {t.save}</button>
     </div>
   );
 }
 
 function NewTenantModal({t,onClose,onSave,onAddContract}){
-  const [form,setForm]=useState({name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",docType:"recibo",building:""});
+  const [form,setForm]=useState({
+    name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",
+    building:"",docType:"recibo",payFreq:"mensual",
+    fianza:"",fianzaAmount:"",
+    notes:""
+  });
   const [saved,setSaved]=useState(false);
   const [savedId,setSavedId]=useState(null);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
@@ -1634,15 +1678,38 @@ function NewTenantModal({t,onClose,onSave,onAddContract}){
           <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
           <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
         </div>
+        <hr/>
         <div className="fg">
-          <label>Tipo de documento mensual</label>
-          <div style={{display:"flex",gap:8,marginTop:6}}>
+          <label>🧾 Tipo de documento</label>
+          <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
             <button className={`btn btn-sm ${form.docType==="recibo"?"btn-p":"btn-o"}`} onClick={()=>set("docType","recibo")}>🧾 Recibo</button>
             <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
+            <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
           </div>
-          <p style={{fontSize:11,color:"var(--warm)",marginTop:4}}>
-            {form.docType==="factura"?"📋 La factura la harás tú manualmente":"🖨️ El recibo se genera automáticamente"}
-          </p>
+          {form.docType==="ambos"&&<p style={{fontSize:11,color:"var(--warm)",marginTop:4}}>Se pedirá nº de recibo y nº de factura al registrar el pago</p>}
+        </div>
+        <div className="fg">
+          <label>📅 Frecuencia de pago</label>
+          <select value={form.payFreq} onChange={e=>set("payFreq",e.target.value)} style={{marginTop:4}}>
+            <option value="mensual">Mensual</option>
+            <option value="2meses">Cada 2 meses</option>
+            <option value="3meses">Cada 3 meses</option>
+            <option value="4meses">Cada 4 meses</option>
+            <option value="6meses">Cada 6 meses</option>
+          </select>
+        </div>
+        <hr/>
+        <div className="fg">
+          <label>🔒 Fianza</label>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button className={`btn btn-sm ${form.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>set("fianza","si")}>✅ Sí, me han dado fianza</button>
+            <button className={`btn btn-sm ${form.fianza==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("fianza","no")}>❌ No</button>
+          </div>
+          {form.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe fianza €" value={form.fianzaAmount} onChange={e=>set("fianzaAmount",e.target.value)}/>}
+        </div>
+        <div className="fg">
+          <label>📝 Notas / Comentarios</label>
+          <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} placeholder="Observaciones, acuerdos especiales..." rows={3} style={{width:"100%",padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/>
         </div>
         <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.name||!form.unit||!form.rent}>
           ✅ Crear inquilino
