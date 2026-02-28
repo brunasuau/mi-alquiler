@@ -529,6 +529,8 @@ export default function App() {
   const [sidebarOpen,setSidebarOpen]=useState(true);
   const [documents,setDocuments]=useState([]);
   const [contracts,setContracts]=useState([]);
+  const [properties,setProperties]=useState([]);
+  const [currentProp,setCurrentProp]=useState(null); // {id, name, buildings:[]}
 
   const t=T[lang||"es"];
   const isOwner=profile?.role==="owner";
@@ -544,11 +546,32 @@ export default function App() {
   },[]);
 
   useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"properties",user.uid,"list"),snap=>{
+      const props=snap.docs.map(d=>({id:d.id,...d.data()}));
+      setProperties(props);
+      if(props.length===1)setCurrentProp(props[0]);
+      // First time: create default Calafell property
+      if(props.length===0){
+        addDoc(collection(db,"properties",user.uid,"list"),{
+          name:"Calafell",
+          buildings:["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"],
+          createdAt:serverTimestamp()
+        });
+      }
+    });
+  },[user,isOwner]);
+
+  useEffect(()=>{
     if(!isOwner)return;
     const q=query(collection(db,"users"),where("role","==","tenant"));
-    const unsub=onSnapshot(q,snap=>setTenants(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    const unsub=onSnapshot(q,snap=>{
+      const all=snap.docs.map(d=>({id:d.id,...d.data()}));
+      // Filter by current property if set
+      setTenants(currentProp?all.filter(t=>t.propId===currentProp.id):all);
+    });
     return unsub;
-  },[isOwner]);
+  },[isOwner,currentProp]);
 
   useEffect(()=>{
     if(!isOwner||!user)return;
@@ -577,7 +600,7 @@ export default function App() {
     });
   },[user,isOwner]);
   async function saveInvoice(inv){
-    await addDoc(collection(db,"invoices",user.uid,"files"),{...inv,createdAt:serverTimestamp()});
+    await addDoc(collection(db,"invoices",user.uid,"files"),{...inv,propId:currentProp?.id||"",createdAt:serverTimestamp()});
   }
   async function deleteInvoice(id){
     const {deleteDoc}=await import("firebase/firestore");
@@ -594,7 +617,7 @@ export default function App() {
     });
   },[user,isOwner]);
   async function saveReceipt(rec){
-    await addDoc(collection(db,"receipts",user.uid,"files"),{...rec,createdAt:serverTimestamp()});
+    await addDoc(collection(db,"receipts",user.uid,"files"),{...rec,propId:currentProp?.id||"",createdAt:serverTimestamp()});
   }
   async function deleteReceipt(id){
     const {deleteDoc}=await import("firebase/firestore");
@@ -618,6 +641,11 @@ export default function App() {
   if(user===undefined)return(<><style>{css}</style><div style={{minHeight:"100vh",background:"#1A1612",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:"#8C7B6E",fontFamily:"'DM Sans',sans-serif"}}>Cargando...</p></div></>);
   if(!lang&&!user)return(<><style>{css}</style><LangSelect onSelect={setLang}/></>);
   if(!user)return(<><style>{css}</style><LoginScreen t={t} onLogin={(u,p)=>{setUser(u);setProfile(p);setPage(p.role==="owner"?"dashboard":"t-home");}}/></>);
+  if(isOwner&&!currentProp)return(<><style>{css}</style><PropertySelector user={user} properties={properties} onSelect={setCurrentProp} onCreateProp={async(name,buildings)=>{
+    const ref=await addDoc(collection(db,"properties",user.uid,"list"),{name,buildings,createdAt:serverTimestamp()});
+    // Migrate existing tenants to this prop if it's the first one
+    showToast("✅ Propiedad '"+name+"' creada");
+  }}/></>);
 
   const ownerNav=[
     {id:"dashboard",icon:"📊",label:t.dashboard},
@@ -734,7 +762,7 @@ export default function App() {
       await setDoc(tenantRef,{
         name,unit,phone:phone||"",rent:parseFloat(rent),email:email||"",role:"tenant",
         joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
-        docType:docType||"recibo",building:building||"",
+        docType:docType||"recibo",building:building||"",propId:currentProp?.id||"",
         payFreq:payFreq||"mensual",
         rentRecibo:docType==="ambos"?parseFloat(rentRecibo)||0:0,
         rentFactura:docType==="ambos"?parseFloat(rentFactura)||0:0,
@@ -755,15 +783,15 @@ export default function App() {
   const renderPage=()=>{
     if(isOwner){
       if(page==="dashboard")return<Dashboard t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})}/>;
-      if(page==="tenants")return<Tenants t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
-      if(page==="finances")return<Finances t={t} tenants={tenants} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onDeleteCost={deleteCost}/>;
+      if(page==="tenants")return<Tenants t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
+      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onDeleteCost={deleteCost}/>;
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
       if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
       if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
-      if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
-      if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
+      if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
+      if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -775,8 +803,8 @@ export default function App() {
   const renderModal=()=>{
     if(!modal)return null;
     if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})} contracts={contracts} onUploadContract={()=>setModal({type:"upload-contract-tenant",id:modal.id})} onDelete={()=>deleteTenant(modal.id)} onUpdateField={updateTenantField}/>;}
-    if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
-    if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
+    if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} buildings={currentProp?.buildings||[]} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
+    if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant} propBuildings={currentProp?.buildings||[]}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
     if(modal.type==="new-invoice"){
       const ten=tenants.find(x=>x.id===modal.tenantId);
@@ -844,6 +872,12 @@ export default function App() {
             <button onClick={()=>setSidebarOpen(v=>!v)} style={{background:"none",border:"none",color:"var(--warm)",cursor:"pointer",fontSize:18,padding:"4px 6px",marginLeft:"auto"}}>{sidebarOpen?"◀":"▶"}</button>
           </div>
           {sidebarOpen&&<div className="s-role">{isOwner?t.owner:t.tenant}</div>}
+          {sidebarOpen&&isOwner&&currentProp&&(
+            <div style={{margin:"0 10px 6px",background:"#2A2420",borderRadius:8,padding:"6px 10px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{fontSize:12,color:"var(--cream)",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🏢 {currentProp.name}</div>
+              <button style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:14,padding:"0 0 0 6px",flexShrink:0}} onClick={()=>setCurrentProp(null)} title="Cambiar propiedad">⇄</button>
+            </div>
+          )}
           <nav className="s-nav">
             {nav.map(item=>(
               <button key={item.id} className={activeClass(item.id)} onClick={()=>setPage(item.id)} title={item.label}>
@@ -907,6 +941,83 @@ export default function App() {
       {modal&&<div className="overlay" onClick={e=>e.target===e.currentTarget&&setModal(null)}>{renderModal()}</div>}
       {toast&&<div className="toast">{toast}</div>}
     </>
+  );
+}
+
+function PropertySelector({user,properties,onSelect,onCreateProp}){
+  const [creating,setCreating]=useState(false);
+  const [name,setName]=useState("");
+  const [buildings,setBuildings]=useState([""]);
+
+  const handleCreate=async()=>{
+    if(!name.trim())return;
+    const cleanBuildings=buildings.filter(b=>b.trim());
+    await onCreateProp(name.trim(),cleanBuildings);
+    setCreating(false);setName("");setBuildings([""]);
+  };
+
+  const addBuilding=()=>setBuildings(b=>[...b,""]);
+  const setBuilding=(i,v)=>setBuildings(b=>b.map((x,j)=>j===i?v:x));
+  const removeBuilding=(i)=>setBuildings(b=>b.filter((_,j)=>j!==i));
+
+  const colors=["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"];
+
+  return(
+    <div style={{minHeight:"100vh",background:"#1A1612",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:36,color:"#F5EFE8",marginBottom:6}}>Mi<span style={{color:"#C4622D",fontStyle:"italic"}}>Alquiler</span></div>
+      <div style={{color:"#8C7B6E",fontSize:14,marginBottom:32}}>Selecciona una propiedad para continuar</div>
+
+      <div style={{width:"100%",maxWidth:500}}>
+        {properties.length>0&&(
+          <>
+            <div style={{color:"#8C7B6E",fontSize:12,textTransform:"uppercase",letterSpacing:".7px",marginBottom:12}}>Tus propiedades</div>
+            {properties.map((p,i)=>(
+              <div key={p.id} onClick={()=>onSelect(p)} style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:"16px 20px",marginBottom:10,cursor:"pointer",display:"flex",alignItems:"center",gap:14,transition:"all .2s"}}
+                onMouseEnter={e=>e.currentTarget.style.border="1px solid #C4622D"}
+                onMouseLeave={e=>e.currentTarget.style.border="1px solid #3A2E28"}>
+                <div style={{width:44,height:44,borderRadius:12,background:colors[i%colors.length],display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>🏢</div>
+                <div style={{flex:1}}>
+                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8"}}>{p.name}</div>
+                  {p.buildings?.length>0&&<div style={{fontSize:12,color:"#8C7B6E",marginTop:2}}>{p.buildings.join(" · ")}</div>}
+                </div>
+                <div style={{color:"#C4622D",fontSize:20}}>›</div>
+              </div>
+            ))}
+            <div style={{height:16}}/>
+          </>
+        )}
+
+        {!creating?(
+          <button onClick={()=>setCreating(true)} style={{width:"100%",background:"none",border:"2px dashed #3A2E28",borderRadius:14,padding:"16px",color:"#8C7B6E",cursor:"pointer",fontSize:14,fontFamily:"'DM Sans',sans-serif",transition:"all .2s"}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor="#C4622D";e.currentTarget.style.color="#F5EFE8";}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor="#3A2E28";e.currentTarget.style.color="#8C7B6E";}}>
+            ➕ Añadir nueva propiedad
+          </button>
+        ):(
+          <div style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:20}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8",marginBottom:16}}>Nueva propiedad</div>
+            <div style={{marginBottom:12}}>
+              <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Nombre de la propiedad</label>
+              <input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: Calafell, Barcelona, Oficinas..." style={{width:"100%",background:"#1A1612",border:"1px solid #3A2E28",borderRadius:8,padding:"10px 12px",color:"#F5EFE8",fontFamily:"'DM Sans',sans-serif",fontSize:14,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Naves / Edificios (opcional)</label>
+              {buildings.map((b,i)=>(
+                <div key={i} style={{display:"flex",gap:6,marginBottom:6}}>
+                  <input value={b} onChange={e=>setBuilding(i,e.target.value)} placeholder={`Nave ${i+1}`} style={{flex:1,background:"#1A1612",border:"1px solid #3A2E28",borderRadius:8,padding:"8px 12px",color:"#F5EFE8",fontFamily:"'DM Sans',sans-serif",fontSize:13}}/>
+                  {buildings.length>1&&<button onClick={()=>removeBuilding(i)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:18}}>✕</button>}
+                </div>
+              ))}
+              <button onClick={addBuilding} style={{background:"none",border:"none",color:"#C4622D",cursor:"pointer",fontSize:13,padding:0}}>+ Añadir nave</button>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:16}}>
+              <button onClick={()=>setCreating(false)} style={{flex:1,background:"none",border:"1px solid #3A2E28",borderRadius:10,padding:"10px",color:"#8C7B6E",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Cancelar</button>
+              <button onClick={handleCreate} disabled={!name.trim()} style={{flex:2,background:"#C4622D",border:"none",borderRadius:10,padding:"10px",color:"white",cursor:"pointer",fontWeight:600,fontFamily:"'DM Sans',sans-serif",opacity:name.trim()?1:.5}}>Crear propiedad</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -992,8 +1103,8 @@ function Dashboard({t,tenants,onSelect}){
   );
 }
 
-function Tenants({t,tenants,onSelect,onNew,onEdit}){
-  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+function Tenants({t,tenants,onSelect,onNew,onEdit,buildings=[]}){
+  buildings=buildings.filter(b=>b);
   const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
   const groups={};
   buildings.forEach(b=>groups[b]=[]);
@@ -1084,7 +1195,8 @@ function Tenants({t,tenants,onSelect,onNew,onEdit}){
   );
 }
 
-function Finances({t,tenants,onToggle,onAddCost,onDeleteCost}){
+function Finances(props){
+  const {t,tenants,onToggle,onAddCost,onDeleteCost}=props;
   const now=new Date();
   const startYear=2024; const endYear=startYear+15;
   const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -1097,9 +1209,9 @@ function Finances({t,tenants,onToggle,onAddCost,onDeleteCost}){
   const [verTodo,setVerTodo]=useState(false);
   const years=Array.from({length:15},(_,i)=>startYear+i);
   const monthsOfYear=monthNames.map(m=>`${m} ${selYear}`);
-  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+  const buildings=(props.buildings||[]).filter(b=>b);
   const getTenantsByBuilding=(b)=>tenants.filter(t=>t.building===b);
-  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const getBuildingColor=(_,i)=>["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"][i%7];
 
   // Chart data for selected year
   const chartData=monthsOfYear.map(m=>{
@@ -1671,7 +1783,7 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,on
   );
 }
 
-function EditTenantModal({t,tenant,onClose,onSave}){
+function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
   const [form,setForm]=useState({
     name:tenant?.name||"",unit:tenant?.unit||"",phone:tenant?.phone||"",
     rent:tenant?.rent||"",email:tenant?.email||"",
@@ -1690,9 +1802,7 @@ function EditTenantModal({t,tenant,onClose,onSave}){
       <div className="fg"><label>🏢 Nave / Edificio</label>
         <select value={form.building} onChange={e=>set("building",e.target.value)}>
           <option value="">— Sin nave asignada —</option>
-          <option value="C/ Pou 61, Nau A">C/ Pou 61, Nau A</option>
-          <option value="C/ Pou 61, Nau B">C/ Pou 61, Nau B</option>
-          <option value="C/ Pou 61, Nau C">C/ Pou 61, Nau C</option>
+          {(propBuildings||[]).filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
         </select>
       </div>
       <div className="gr2">
@@ -1753,7 +1863,7 @@ function EditTenantModal({t,tenant,onClose,onSave}){
   );
 }
 
-function NewTenantModal({t,onClose,onSave,onAddContract}){
+function NewTenantModal({t,onClose,onSave,onAddContract,buildings=[]}){
   const [form,setForm]=useState({
     name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",
     building:"",docType:"recibo",payFreq:"mensual",
@@ -1778,9 +1888,7 @@ function NewTenantModal({t,onClose,onSave,onAddContract}){
         <div className="fg"><label>🏢 Nave / Edificio</label>
           <select value={form.building} onChange={e=>set("building",e.target.value)}>
             <option value="">— Seleccionar nave —</option>
-            <option value="C/ Pou 61, Nau A">C/ Pou 61, Nau A</option>
-            <option value="C/ Pou 61, Nau B">C/ Pou 61, Nau B</option>
-            <option value="C/ Pou 61, Nau C">C/ Pou 61, Nau C</option>
+            {buildings.filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
           </select>
         </div>
         <div className="gr2">
