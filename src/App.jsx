@@ -642,10 +642,49 @@ export default function App() {
   async function togglePayment(tenantId,month){
     const t2=tenants.find(x=>x.id===tenantId);if(!t2)return;
     const payments={...(t2.payments||{})};const cur=payments[month]||{paid:false};
-    payments[month]={paid:!cur.paid,date:!cur.paid?today():null};
+    const nowPaying=!cur.paid;
+    payments[month]={paid:nowPaying,date:nowPaying?today():null};
     await persist(doc(db,"users",tenantId),{payments});
-    if(payments[month].paid)generateReceipt({tenantName:t2.name,unit:t2.unit,month,date:today()});
-    showToast(payments[month].paid?"✅ Pago registrado · PDF descargado":"❌ Pago revertido");
+
+    if(nowPaying){
+      const now=new Date();
+      const year=now.getFullYear();
+      const dateStr=today();
+      const concept=`Alquiler ${t2.unit||""} ${month}`;
+
+      // Generate FACTURA if docType is factura or ambos
+      if(t2.docType==="factura"||t2.docType==="ambos"){
+        const allInvNums=invoices.filter(i=>i.year===year).map(i=>i.invoiceNum);
+        const nextNum=allInvNums.length>0?Math.max(...allInvNums)+1:7;
+        const base=parseFloat(t2.docType==="ambos"?t2.rentFactura:t2.rent)||0;
+        const inv={
+          invoiceNum:nextNum, year, date:dateStr, concept,
+          base, tenantId, tenantName:t2.name,
+          clientName:t2.name, clientNif:t2.dni||"",
+          clientAddress:t2.address||"", clientEmail:t2.email||""
+        };
+        await saveInvoice(inv);
+        generateInvoicePDF(inv);
+      }
+
+      // Generate RECIBO if docType is recibo or ambos
+      if(t2.docType==="recibo"||t2.docType==="ambos"||!t2.docType){
+        const allRecNums=receipts.filter(r=>r.year===year).map(r=>r.receiptNum);
+        const nextNum=allRecNums.length>0?Math.max(...allRecNums)+1:1;
+        const amount=parseFloat(t2.docType==="ambos"?t2.rentRecibo:t2.rent)||0;
+        const rec={
+          receiptNum:nextNum, year, date:dateStr, concept,
+          amount, tenantId, tenantName:t2.name,
+          clientName:t2.name, clientDni:t2.dni||""
+        };
+        await saveReceipt(rec);
+        generateReceiptPDF(rec);
+      }
+
+      showToast("✅ Pago registrado · Documento generado y guardado");
+    }else{
+      showToast("❌ Pago revertido");
+    }
   }
 
   async function changeStatus(tenantId,maintId,status){
