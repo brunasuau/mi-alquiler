@@ -729,6 +729,32 @@ export default function App() {
     showToast("✅ Incidencia enviada");
   }
 
+  async function renewContract(tenantId, months){
+    const ten=tenants.find(x=>x.id===tenantId);if(!ten)return;
+    const currentEnd=ten.contractEnd?new Date(ten.contractEnd):new Date();
+    const newEnd=new Date(currentEnd);
+    newEnd.setMonth(newEnd.getMonth()+parseInt(months));
+    const newEndStr=newEnd.toISOString().split("T")[0];
+    // Apply IPC if enabled (+1.5%)
+    let newRent=ten.rent;
+    let newRentRecibo=ten.rentRecibo;
+    let newRentFactura=ten.rentFactura;
+    if(ten.ipcEnabled==="si"){
+      newRent=Math.round(ten.rent*1.015*100)/100;
+      if(ten.rentRecibo)newRentRecibo=Math.round(ten.rentRecibo*1.015*100)/100;
+      if(ten.rentFactura)newRentFactura=Math.round(ten.rentFactura*1.015*100)/100;
+    }
+    await persist(doc(db,"users",tenantId),{
+      contractEnd:newEndStr,
+      contractStart:ten.contractEnd||ten.contractStart,
+      rent:newRent,
+      ...(ten.rentRecibo?{rentRecibo:newRentRecibo}:{}),
+      ...(ten.rentFactura?{rentFactura:newRentFactura}:{})
+    });
+    setModal(null);
+    showToast(`✅ Contrato renovado hasta ${newEndStr}${ten.ipcEnabled==="si"?" · IPC +1,5% aplicado":""}`);
+  }
+
   async function updateTenantField(tenantId,field,value){
     await persist(doc(db,"users",tenantId),{[field]:value});
     showToast("✅ Actualizado");
@@ -756,14 +782,14 @@ export default function App() {
     showToast("🗑️ Coste eliminado");
   }
 
-  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes,rentRecibo,rentFactura}){
+  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes,rentRecibo,rentFactura,ipcEnabled}){
     try{
       const tenantRef=doc(collection(db,"users"));
       await setDoc(tenantRef,{
         name,unit,phone:phone||"",rent:parseFloat(rent),email:email||"",role:"tenant",
         joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
         docType:docType||"recibo",building:building||"",propId:currentProp?.id||"",
-        payFreq:payFreq||"mensual",
+        payFreq:payFreq||"mensual",ipcEnabled:ipcEnabled||"si",
         rentRecibo:docType==="ambos"?parseFloat(rentRecibo)||0:0,
         rentFactura:docType==="ambos"?parseFloat(rentFactura)||0:0,
         fianza:fianza||"no",fianzaAmount:fianza==="si"?parseFloat(fianzaAmount)||0:0,
@@ -806,6 +832,10 @@ export default function App() {
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} buildings={currentProp?.buildings||[]} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant} propBuildings={currentProp?.buildings||[]}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
+    if(modal.type==="renew-contract"){
+      const ten=tenants.find(x=>x.id===modal.tenantId);
+      return<RenewContractModal tenant={ten} onClose={()=>setModal(null)} onRenew={(months)=>renewContract(modal.tenantId,months)}/>;
+    }
     if(modal.type==="new-invoice"){
       const ten=tenants.find(x=>x.id===modal.tenantId);
       return<NewInvoiceModal t={t} tenant={ten} invoices={invoices} onClose={()=>setModal(null)} onSave={async(inv)=>{
@@ -905,7 +935,12 @@ export default function App() {
                         <div key={i} className="notif-item">
                           {a.type==="ipc"&&`📈 ${a.tenant.name} · Subida IPC (${a.years} año/s) · desde ${a.tenant.contractStart}`}
                           {a.type==="signed_today"&&`📝 ${a.tenant.name} · ${t.contractSigned} ${a.tenant.contractStart}`}
-                          {a.type==="expiring"&&`⚠️ ${a.tenant.name} · ${t.contractExpires} ${a.tenant.contractEnd} (${a.daysLeft} días)`}
+                          {a.type==="expiring"&&(
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                              <span>⚠️ {a.tenant.name} · expira {a.tenant.contractEnd} ({a.daysLeft} días)</span>
+                              <button className="btn btn-p btn-sm" style={{fontSize:11,padding:"3px 8px",flexShrink:0}} onClick={()=>{setShowNotif(false);setModal({type:"renew-contract",tenantId:a.tenant.id});}}>🔄 Renovar</button>
+                            </div>
+                          )}
                         </div>
                       ))}
                   </div>
@@ -933,6 +968,9 @@ export default function App() {
                   {a.type==="expiring"&&`${a.tenant.contractEnd} · ${a.daysLeft} días restantes`}
                 </div>
               </div>
+              {a.type==="expiring"&&(
+                <button className="btn btn-p btn-sm" style={{marginLeft:"auto",flexShrink:0}} onClick={()=>setModal({type:"renew-contract",tenantId:a.tenant.id})}>🔄 Renovar</button>
+              )}
             </div>
           ))}
           {renderPage()}
@@ -1791,7 +1829,8 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
     building:tenant?.building||"",docType:tenant?.docType||"recibo",
     payFreq:tenant?.payFreq||"mensual",fianza:tenant?.fianza||"no",
     fianzaAmount:tenant?.fianzaAmount||"",notes:tenant?.notes||"",
-    rentRecibo:tenant?.rentRecibo||"",rentFactura:tenant?.rentFactura||""
+    rentRecibo:tenant?.rentRecibo||"",rentFactura:tenant?.rentFactura||"",
+    ipcEnabled:tenant?.ipcEnabled||"si"
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(!tenant)return null;
@@ -1847,6 +1886,13 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
         </select>
       </div>
       <div className="fg">
+        <label>📈 Subida IPC anual</label>
+        <div style={{display:"flex",gap:8,marginTop:6}}>
+          <button className={`btn btn-sm ${form.ipcEnabled==="si"?"btn-p":"btn-o"}`} onClick={()=>set("ipcEnabled","si")}>✅ Sí</button>
+          <button className={`btn btn-sm ${form.ipcEnabled==="no"?"btn-o":"btn-o"}`} onClick={()=>set("ipcEnabled","no")}>❌ No</button>
+        </div>
+      </div>
+      <div className="fg">
         <label>🔒 Fianza</label>
         <div style={{display:"flex",gap:8,marginTop:6}}>
           <button className={`btn btn-sm ${form.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>set("fianza","si")}>✅ Sí</button>
@@ -1868,6 +1914,7 @@ function NewTenantModal({t,onClose,onSave,onAddContract,buildings=[]}){
     name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",
     building:"",docType:"recibo",payFreq:"mensual",
     fianza:"",fianzaAmount:"",
+    ipcEnabled:"si",
     notes:""
   });
   const [saved,setSaved]=useState(false);
@@ -1928,6 +1975,14 @@ function NewTenantModal({t,onClose,onSave,onAddContract,buildings=[]}){
             <option value="4meses">Cada 4 meses</option>
             <option value="6meses">Cada 6 meses</option>
           </select>
+        </div>
+        <div className="fg">
+          <label>📈 Subida IPC anual</label>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button className={`btn btn-sm ${form.ipcEnabled==="si"?"btn-p":"btn-o"}`} onClick={()=>set("ipcEnabled","si")}>✅ Sí, aplicar IPC</button>
+            <button className={`btn btn-sm ${form.ipcEnabled==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("ipcEnabled","no")}>❌ No</button>
+          </div>
+          <p style={{fontSize:11,color:"var(--warm)",marginTop:4}}>{form.ipcEnabled==="si"?"Se te avisará cada año para aplicar la subida IPC + 1,5%":"Sin subida automática de IPC"}</p>
         </div>
         <hr/>
         <div className="fg">
@@ -2753,6 +2808,70 @@ function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
       </div>
       <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.amount||!form.clientName}>
         💾 Guardar y descargar PDF
+      </button>
+    </div>
+  );
+}
+
+function RenewContractModal({tenant,onClose,onRenew}){
+  const [months,setMonths]=useState("12");
+  const [preview,setPreview]=useState(null);
+
+  const calcPreview=(m)=>{
+    const currentEnd=tenant?.contractEnd?new Date(tenant.contractEnd):new Date();
+    const newEnd=new Date(currentEnd);
+    newEnd.setMonth(newEnd.getMonth()+parseInt(m));
+    return newEnd.toISOString().split("T")[0];
+  };
+
+  const options=[
+    {value:"3",label:"3 meses"},
+    {value:"6",label:"6 meses"},
+    {value:"11",label:"11 meses"},
+    {value:"12",label:"1 año"},
+    {value:"24",label:"2 años"},
+    {value:"36",label:"3 años"},
+    {value:"48",label:"4 años"},
+    {value:"60",label:"5 años"},
+  ];
+
+  const newRent=tenant?.ipcEnabled==="si"?Math.round((tenant?.rent||0)*1.015*100)/100:tenant?.rent;
+  const newEnd=calcPreview(months);
+
+  return(
+    <div className="modal" style={{maxWidth:420}}>
+      <div className="modal-hd"><h3>🔄 Renovar contrato</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div style={{background:"var(--cream)",borderRadius:10,padding:12,marginBottom:16,fontSize:13}}>
+        <div style={{fontWeight:600,marginBottom:4}}>{tenant?.name} · {tenant?.unit}</div>
+        <div style={{color:"var(--warm)"}}>Contrato actual hasta: <strong>{tenant?.contractEnd||"—"}</strong></div>
+      </div>
+      <div className="fg">
+        <label>⏱️ Renovar por</label>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:8}}>
+          {options.map(o=>(
+            <button key={o.value} className={`btn btn-sm ${months===o.value?"btn-p":"btn-o"}`} onClick={()=>setMonths(o.value)}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{background:"var(--cream)",borderRadius:10,padding:14,marginTop:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,fontSize:13}}>
+          <span style={{color:"var(--warm)"}}>Nueva fecha fin</span>
+          <strong>{newEnd}</strong>
+        </div>
+        {tenant?.ipcEnabled==="si"&&(
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
+            <span style={{color:"var(--warm)"}}>Nuevo alquiler (+IPC 1,5%)</span>
+            <strong style={{color:"var(--sage)"}}>{newRent}€/mes</strong>
+          </div>
+        )}
+        {tenant?.ipcEnabled!=="si"&&(
+          <div style={{fontSize:12,color:"var(--warm)"}}>Sin subida de IPC</div>
+        )}
+      </div>
+      <button className="btn btn-p btn-full" style={{marginTop:16}} onClick={()=>onRenew(months)}>
+        ✅ Confirmar renovación
       </button>
     </div>
   );
