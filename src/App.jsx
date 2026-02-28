@@ -2244,8 +2244,7 @@ function NewContractModal({t,onClose,onSave}){
 }
 // ─── GENERATE INVOICE PDF ────────────────────────────────────────────
 function generateInvoicePDF(inv){
-  const {jsPDF}=window.jspdf;
-  const pdf=new jsPDF();
+  const pdf=new jsPDF({ format:"a4", unit:"mm" });
   const W=210,M=20;
   let y=20;
   const line=()=>{pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=6;};
@@ -2318,8 +2317,7 @@ function generateInvoicePDF(inv){
 
 // ─── GENERATE RECEIPT PDF ────────────────────────────────────────────
 function generateReceiptPDF(rec){
-  const {jsPDF}=window.jspdf;
-  const pdf=new jsPDF();
+  const pdf=new jsPDF({ format:"a4", unit:"mm" });
   const W=210,M=20;
   let y=20;
 
