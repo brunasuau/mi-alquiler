@@ -568,6 +568,40 @@ export default function App() {
     return unsub;
   },[isOwner,user]);
 
+  // INVOICES
+  const [invoices,setInvoices]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"invoices",user.uid,"files"),snap=>{
+      setInvoices(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>a.invoiceNum-b.invoiceNum));
+    });
+  },[user,isOwner]);
+  async function saveInvoice(inv){
+    await addDoc(collection(db,"invoices",user.uid,"files"),{...inv,createdAt:serverTimestamp()});
+  }
+  async function deleteInvoice(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"invoices",user.uid,"files",id));
+    showToast("🗑️ Factura eliminada");
+  }
+
+  // RECEIPTS
+  const [receipts,setReceipts]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"receipts",user.uid,"files"),snap=>{
+      setReceipts(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));
+    });
+  },[user,isOwner]);
+  async function saveReceipt(rec){
+    await addDoc(collection(db,"receipts",user.uid,"files"),{...rec,createdAt:serverTimestamp()});
+  }
+  async function deleteReceipt(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"receipts",user.uid,"files",id));
+    showToast("🗑️ Recibo eliminado");
+  }
+
   async function saveContract(contractInfo){
     await addDoc(collection(db,"contracts",user.uid,"files"),{...contractInfo,createdAt:serverTimestamp()});
   }
@@ -594,6 +628,8 @@ export default function App() {
     {id:"messages",icon:"💬",label:t.messages},
     {id:"documentos",icon:"📁",label:t.documents},
     {id:"contratos",icon:"📝",label:t.contracts},
+    {id:"facturas",icon:"🧾",label:"Facturas"},
+    {id:"recibos",icon:"🖨️",label:"Recibos"},
   ];
   const tenantNav=[
     {id:"t-home",icon:"🏠",label:t.myHome},
@@ -687,6 +723,8 @@ export default function App() {
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
       if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
       if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
+      if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
+      if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -701,6 +739,20 @@ export default function App() {
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
+    if(modal.type==="new-invoice"){
+      const ten=tenants.find(x=>x.id===modal.tenantId);
+      return<NewInvoiceModal t={t} tenant={ten} invoices={invoices} onClose={()=>setModal(null)} onSave={async(inv)=>{
+        await saveInvoice(inv);
+        showToast("✅ Factura guardada");
+      }}/>;
+    }
+    if(modal.type==="new-receipt"){
+      const ten=tenants.find(x=>x.id===modal.tenantId);
+      return<NewReceiptModal t={t} tenant={ten} receipts={receipts} onClose={()=>setModal(null)} onSave={async(rec)=>{
+        await saveReceipt(rec);
+        showToast("✅ Recibo guardado");
+      }}/>;
+    }
     if(modal.type==="upload-contract-tenant"){
       const ten=modal.prefillData||tenants.find(x=>x.id===modal.id);
       return<UploadContractModal t={t} onClose={()=>setModal(null)} prefill={ten} onSave={async(data)=>{
@@ -2190,6 +2242,377 @@ function NewContractModal({t,onClose,onSave}){
     </div>
   );
 }
+// ─── GENERATE INVOICE PDF ────────────────────────────────────────────
+function generateInvoicePDF(inv){
+  const {jsPDF}=window.jspdf;
+  const pdf=new jsPDF();
+  const W=210,M=20;
+  let y=20;
+  const line=()=>{pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=6;};
+  const row=(label,val,bold=false)=>{
+    pdf.setFontSize(10);
+    pdf.setFont("helvetica",bold?"bold":"normal");
+    pdf.text(label,M,y);
+    pdf.setFont("helvetica","bold");
+    pdf.text(String(val),W-M,y,{align:"right"});
+    pdf.setFont("helvetica","normal");
+    y+=7;
+  };
+
+  // Header
+  pdf.setFillColor(42,36,32);pdf.rect(0,0,W,38,"F");
+  pdf.setTextColor(255,255,255);pdf.setFontSize(22);pdf.setFont("helvetica","bold");
+  pdf.text("FACTURA",M,16);
+  pdf.setFontSize(10);pdf.setFont("helvetica","normal");
+  pdf.text(`Nº ${inv.invoiceNum}/${inv.year}`,M,24);
+  pdf.text(`Fecha: ${inv.date}`,M,30);
+  pdf.setTextColor(0,0,0);y=48;
+
+  // Emisor
+  pdf.setFontSize(9);pdf.setFont("helvetica","bold");pdf.text("EMISOR",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  ["JOANA SOLÉ SANTACANA","VIUDA DE JOAN SUAU OLIVELLA","PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª","43820 CALAFELL","DNI: 39618190T","bertasuau@gmail.com · 630 879 206"].forEach(l=>{pdf.text(l,M,y);y+=4.5;});
+  y+=4;
+
+  // Cliente
+  pdf.setFont("helvetica","bold");pdf.text("FACTURAR A",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  if(inv.clientName)pdf.text(inv.clientName,M,y),y+=4.5;
+  if(inv.clientNif)pdf.text(`NIF: ${inv.clientNif}`,M,y),y+=4.5;
+  if(inv.clientAddress)pdf.text(inv.clientAddress,M,y),y+=4.5;
+  if(inv.clientEmail)pdf.text(inv.clientEmail,M,y),y+=4.5;
+  y+=6;line();
+
+  // Concepto
+  pdf.setFillColor(245,240,235);pdf.rect(M,y-2,W-M*2,8,"F");
+  pdf.setFont("helvetica","bold");pdf.setFontSize(10);
+  pdf.text("DESCRIPCIÓN",M+2,y+4);pdf.text("IMPORTE",W-M-2,y+4,{align:"right"});
+  y+=12;pdf.setFont("helvetica","normal");
+  pdf.text(inv.concept||"Alquiler",M,y);
+  pdf.text(`€${parseFloat(inv.base).toFixed(2)}`,W-M,y,{align:"right"});
+  y+=10;line();
+
+  // Totals
+  const base=parseFloat(inv.base)||0;
+  const iva=base*0.21;
+  const irpf=base*0.19;
+  const total=base+iva-irpf;
+  row("SUBTOTAL",`€${base.toFixed(2)}`);
+  row("IVA 21%",`€${iva.toFixed(2)}`);
+  row("SUBTOTAL CON IVA",`€${(base+iva).toFixed(2)}`,true);
+  row("IRPF 19%",`-€${irpf.toFixed(2)}`);
+  y+=2;pdf.setFillColor(42,36,32);pdf.rect(M,y-4,W-M*2,12,"F");
+  pdf.setTextColor(255,255,255);pdf.setFont("helvetica","bold");pdf.setFontSize(12);
+  pdf.text("TOTAL",M+4,y+4);
+  pdf.text(`€${total.toFixed(2)}`,W-M-4,y+4,{align:"right"});
+  pdf.setTextColor(0,0,0);y+=18;
+
+  // Footer
+  pdf.setFontSize(9);pdf.setFont("helvetica","normal");
+  pdf.text("Gracias por hacer negocios con nosotros.",M,y);y+=5;
+  pdf.text("Contacto: Berta Suau · +34 630 879 206 · bertasuau@gmail.com",M,y);y+=5;
+  pdf.text("GIRO CUENTA: ES95 0049 2720 4126 1406 7889",M,y);
+
+  pdf.save(`Factura_${inv.invoiceNum}_${inv.year}_${inv.clientName||""}.pdf`);
+}
+
+// ─── GENERATE RECEIPT PDF ────────────────────────────────────────────
+function generateReceiptPDF(rec){
+  const {jsPDF}=window.jspdf;
+  const pdf=new jsPDF();
+  const W=210,M=20;
+  let y=20;
+
+  pdf.setFillColor(42,36,32);pdf.rect(0,0,W,38,"F");
+  pdf.setTextColor(255,255,255);pdf.setFontSize(22);pdf.setFont("helvetica","bold");
+  pdf.text("RECIBO",M,16);
+  pdf.setFontSize(10);pdf.setFont("helvetica","normal");
+  pdf.text(`Nº ${rec.receiptNum}/${rec.year}`,M,24);
+  pdf.text(`Fecha: ${rec.date}`,M,30);
+  pdf.setTextColor(0,0,0);y=48;
+
+  pdf.setFontSize(9);pdf.setFont("helvetica","bold");pdf.text("ARRENDADOR",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  ["JOANA SOLÉ SANTACANA","DNI: 39618190T","PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª, 43820 CALAFELL"].forEach(l=>{pdf.text(l,M,y);y+=4.5;});
+  y+=6;
+  pdf.setFont("helvetica","bold");pdf.text("ARRENDATARIO",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  if(rec.clientName)pdf.text(rec.clientName,M,y),y+=4.5;
+  if(rec.clientDni)pdf.text(`DNI/NIE: ${rec.clientDni}`,M,y),y+=4.5;
+  y+=6;
+
+  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=8;
+  pdf.setFontSize(10);pdf.setFont("helvetica","bold");pdf.text("CONCEPTO",M,y);y+=6;
+  pdf.setFont("helvetica","normal");pdf.text(rec.concept||"Alquiler mensual",M,y);y+=10;
+  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=8;
+
+  pdf.setFillColor(42,36,32);pdf.rect(M,y-4,W-M*2,14,"F");
+  pdf.setTextColor(255,255,255);pdf.setFont("helvetica","bold");pdf.setFontSize(14);
+  pdf.text("IMPORTE TOTAL",M+4,y+5);
+  pdf.text(`€${parseFloat(rec.amount).toFixed(2)}`,W-M-4,y+5,{align:"right"});
+  pdf.setTextColor(0,0,0);y+=22;
+
+  pdf.setFontSize(9);pdf.setFont("helvetica","normal");
+  pdf.text("He recibido de la parte arrendataria la cantidad indicada en concepto de renta.",M,y);y+=5;
+  pdf.text("GIRO CUENTA: ES95 0049 2720 4126 1406 7889",M,y);y+=12;
+  pdf.text("Firma arrendador: _______________________",M,y);
+
+  pdf.save(`Recibo_${rec.receiptNum}_${rec.year}_${rec.clientName||""}.pdf`);
+}
+
+// ─── INVOICES PAGE ────────────────────────────────────────────────────
+function InvoicesPage({t,tenants,invoices,onNew,onDelete}){
+  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const [openTenant,setOpenTenant]=useState(null);
+
+  // Group invoices by tenantId
+  const invByTenant={};
+  invoices.forEach(inv=>{(invByTenant[inv.tenantId]=invByTenant[inv.tenantId]||[]).push(inv);});
+
+  // Group tenants by building
+  const groups={};
+  buildings.forEach(b=>groups[b]=[]);
+  groups["Sin nave"]=[];
+  tenants.forEach(ten=>{
+    if(ten.docType==="recibo")return; // skip recibo-only
+    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave";
+    groups[b].push(ten);
+  });
+  const allGroups=[...buildings,"Sin nave"].filter(b=>groups[b].length>0);
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>🧾 Facturas</h2><p>{invoices.length} facturas guardadas</p></div>
+      </div>
+      {allGroups.map(building=>(
+        <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+          <div style={{background:getBuildingColor(building),color:"white",padding:"10px 16px",fontFamily:"'DM Serif Display',serif",fontSize:15}}>
+            🏢 {building}
+          </div>
+          {groups[building].map(ten=>{
+            const invs=invByTenant[ten.id]||[];
+            const isOpen=openTenant===ten.id;
+            return(
+              <div key={ten.id} style={{borderBottom:"1px solid var(--border)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",cursor:"pointer",background:"white"}} onClick={()=>setOpenTenant(isOpen?null:ten.id)}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div className="av av-sm" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:14}}>{ten.name}</div>
+                      <div style={{fontSize:11,color:"var(--warm)"}}>{ten.unit} · {invs.length} facturas</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();onNew(ten.id);}}>➕ Nueva factura</button>
+                    <span style={{fontSize:16}}>{isOpen?"▲":"▼"}</span>
+                  </div>
+                </div>
+                {isOpen&&(
+                  <div style={{background:"var(--cream)",padding:"8px 16px"}}>
+                    {invs.length===0
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:"8px 0"}}>No hay facturas aún</p>
+                      :invs.sort((a,b)=>b.invoiceNum-a.invoiceNum).map(inv=>(
+                        <div key={inv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                          <div>
+                            <div style={{fontWeight:600,fontSize:13}}>Factura {inv.invoiceNum}/{inv.year} · {inv.date}</div>
+                            <div style={{fontSize:11,color:"var(--warm)"}}>{inv.concept} · Base: {inv.base}€ · Total: {(parseFloat(inv.base)*(1+0.21-0.19)).toFixed(2)}€</div>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button className="btn btn-o btn-sm" onClick={()=>generateInvoicePDF(inv)}>📥</button>
+                            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar factura?"))onDelete(inv.id);}}>🗑️</button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {allGroups.length===0&&<div className="card"><p style={{textAlign:"center",color:"var(--warm)",padding:20}}>No hay inquilinos con factura</p></div>}
+    </div>
+  );
+}
+
+// ─── RECEIPTS PAGE ────────────────────────────────────────────────────
+function ReceiptsPage({t,tenants,receipts,onNew,onDelete}){
+  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const [openTenant,setOpenTenant]=useState(null);
+  const recByTenant={};
+  receipts.forEach(rec=>{(recByTenant[rec.tenantId]=recByTenant[rec.tenantId]||[]).push(rec);});
+  const groups={};
+  buildings.forEach(b=>groups[b]=[]);
+  groups["Sin nave"]=[];
+  tenants.forEach(ten=>{
+    if(ten.docType==="factura")return;
+    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave";
+    groups[b].push(ten);
+  });
+  const allGroups=[...buildings,"Sin nave"].filter(b=>groups[b].length>0);
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>🖨️ Recibos</h2><p>{receipts.length} recibos guardados</p></div>
+      </div>
+      {allGroups.map(building=>(
+        <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+          <div style={{background:getBuildingColor(building),color:"white",padding:"10px 16px",fontFamily:"'DM Serif Display',serif",fontSize:15}}>
+            🏢 {building}
+          </div>
+          {groups[building].map(ten=>{
+            const recs=recByTenant[ten.id]||[];
+            const isOpen=openTenant===ten.id;
+            return(
+              <div key={ten.id} style={{borderBottom:"1px solid var(--border)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",cursor:"pointer",background:"white"}} onClick={()=>setOpenTenant(isOpen?null:ten.id)}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div className="av av-sm" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:14}}>{ten.name}</div>
+                      <div style={{fontSize:11,color:"var(--warm)"}}>{ten.unit} · {recs.length} recibos</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();onNew(ten.id);}}>➕ Nuevo recibo</button>
+                    <span style={{fontSize:16}}>{isOpen?"▲":"▼"}</span>
+                  </div>
+                </div>
+                {isOpen&&(
+                  <div style={{background:"var(--cream)",padding:"8px 16px"}}>
+                    {recs.length===0
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:"8px 0"}}>No hay recibos aún</p>
+                      :recs.sort((a,b)=>b.receiptNum-a.receiptNum).map(rec=>(
+                        <div key={rec.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                          <div>
+                            <div style={{fontWeight:600,fontSize:13}}>Recibo {rec.receiptNum}/{rec.year} · {rec.date}</div>
+                            <div style={{fontSize:11,color:"var(--warm)"}}>{rec.concept} · {rec.amount}€</div>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button className="btn btn-o btn-sm" onClick={()=>generateReceiptPDF(rec)}>📥</button>
+                            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar recibo?"))onDelete(rec.id);}}>🗑️</button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── NEW INVOICE MODAL ────────────────────────────────────────────────
+function NewInvoiceModal({t,tenant,invoices,onClose,onSave}){
+  const now=new Date();
+  const year=now.getFullYear();
+  // Next invoice number: max existing + 1, starting from 7
+  const allNums=invoices.filter(i=>i.year===year).map(i=>i.invoiceNum);
+  const nextNum=allNums.length>0?Math.max(...allNums)+1:7;
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+  const [form,setForm]=useState({
+    invoiceNum:nextNum,year,
+    date:`${now.getDate()}/${now.getMonth()+1}/${year}`,
+    concept:`Alquiler ${tenant?.unit||""} ${monthNames[now.getMonth()]} ${year}`,
+    base:tenant?.rentFactura||tenant?.rent||"",
+    clientName:tenant?.name||"",clientNif:"",clientAddress:"",clientEmail:tenant?.email||""
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const base=parseFloat(form.base)||0;
+  const iva=base*0.21;
+  const irpf=base*0.19;
+  const total=base+iva-irpf;
+
+  const handleSave=async()=>{
+    await onSave({...form,tenantId:tenant.id,tenantName:tenant.name,invoiceNum:parseInt(form.invoiceNum)});
+    generateInvoicePDF({...form,tenantId:tenant.id,invoiceNum:parseInt(form.invoiceNum)});
+    onClose();
+  };
+
+  return(
+    <div className="modal" style={{maxWidth:520}}>
+      <div className="modal-hd"><h3>🧾 Nueva Factura</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="gr2">
+        <div className="fg"><label>Nº Factura</label><input type="number" value={form.invoiceNum} onChange={e=>set("invoiceNum",e.target.value)}/></div>
+        <div className="fg"><label>Fecha</label><input value={form.date} onChange={e=>set("date",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>Concepto</label><input value={form.concept} onChange={e=>set("concept",e.target.value)}/></div>
+      <div className="fg"><label>Base imponible €</label><input type="number" value={form.base} onChange={e=>set("base",e.target.value)}/></div>
+      {base>0&&(
+        <div style={{background:"var(--cream)",borderRadius:10,padding:12,marginBottom:12,fontSize:13}}>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>Subtotal</span><span>€{base.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>IVA 21%</span><span>€{iva.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>IRPF 19%</span><span>-€{irpf.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderTop:"2px solid var(--border)",fontWeight:700,marginTop:4}}><span>TOTAL</span><span>€{total.toFixed(2)}</span></div>
+        </div>
+      )}
+      <hr/>
+      <div style={{fontSize:12,fontWeight:600,color:"var(--warm)",marginBottom:8,textTransform:"uppercase"}}>Datos del cliente</div>
+      <div className="gr2">
+        <div className="fg"><label>Nombre / Empresa</label><input value={form.clientName} onChange={e=>set("clientName",e.target.value)}/></div>
+        <div className="fg"><label>NIF / DNI</label><input value={form.clientNif} onChange={e=>set("clientNif",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>Dirección</label><input value={form.clientAddress} onChange={e=>set("clientAddress",e.target.value)}/></div>
+      <div className="fg"><label>Email</label><input value={form.clientEmail} onChange={e=>set("clientEmail",e.target.value)}/></div>
+      <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.base||!form.clientName}>
+        💾 Guardar y descargar PDF
+      </button>
+    </div>
+  );
+}
+
+// ─── NEW RECEIPT MODAL ────────────────────────────────────────────────
+function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
+  const now=new Date();
+  const year=now.getFullYear();
+  const allNums=receipts.filter(r=>r.year===year).map(r=>r.receiptNum);
+  const nextNum=allNums.length>0?Math.max(...allNums)+1:1;
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+  const [form,setForm]=useState({
+    receiptNum:nextNum,year,
+    date:`${now.getDate()}/${now.getMonth()+1}/${year}`,
+    concept:`Alquiler ${tenant?.unit||""} ${monthNames[now.getMonth()]} ${year}`,
+    amount:tenant?.rentRecibo||tenant?.rent||"",
+    clientName:tenant?.name||"",clientDni:tenant?.dni||""
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  const handleSave=async()=>{
+    await onSave({...form,tenantId:tenant.id,tenantName:tenant.name,receiptNum:parseInt(form.receiptNum)});
+    generateReceiptPDF({...form,tenantId:tenant.id,receiptNum:parseInt(form.receiptNum)});
+    onClose();
+  };
+
+  return(
+    <div className="modal" style={{maxWidth:480}}>
+      <div className="modal-hd"><h3>🖨️ Nuevo Recibo</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="gr2">
+        <div className="fg"><label>Nº Recibo</label><input type="number" value={form.receiptNum} onChange={e=>set("receiptNum",e.target.value)}/></div>
+        <div className="fg"><label>Fecha</label><input value={form.date} onChange={e=>set("date",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>Concepto</label><input value={form.concept} onChange={e=>set("concept",e.target.value)}/></div>
+      <div className="fg"><label>Importe €</label><input type="number" value={form.amount} onChange={e=>set("amount",e.target.value)}/></div>
+      <hr/>
+      <div className="gr2">
+        <div className="fg"><label>Nombre inquilino</label><input value={form.clientName} onChange={e=>set("clientName",e.target.value)}/></div>
+        <div className="fg"><label>DNI / NIE</label><input value={form.clientDni} onChange={e=>set("clientDni",e.target.value)}/></div>
+      </div>
+      <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.amount||!form.clientName}>
+        💾 Guardar y descargar PDF
+      </button>
+    </div>
+  );
+}
+
 function StatusBadge({status,t}){
   const map={"Pendiente":{bg:"#FDECEA",color:"#D94F3D",label:t?.pending||"Pendiente"},"En revisión":{bg:"#FDF6E3",color:"#D4A853",label:t?.inReview||"En revisión"},"Resuelto":{bg:"#E6F4ED",color:"#4A9B6F",label:t?.resolved||"Resuelto"}};
   const s=map[status]||{bg:"#F0ECE8",color:"#8C7B6E",label:status};
