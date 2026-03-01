@@ -557,7 +557,7 @@ export default function App() {
       if(props.length===0){
         addDoc(collection(db,"properties",user.uid,"list"),{
           name:"Calafell",
-          buildings:["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"],
+          buildings:["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C","C/ Montserrat 14","C/ Barceloneta 3","C/ Torredembarra 13","Monjos"],
           createdAt:serverTimestamp()
         });
       }
@@ -852,6 +852,19 @@ export default function App() {
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} buildings={currentProp?.buildings||[]} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant} propBuildings={currentProp?.buildings||[]}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
+    if(modal.type==="manage-buildings"){
+      return<ManageBuildingsModal
+        prop={currentProp}
+        onClose={()=>setModal(null)}
+        onSave={async(buildings)=>{
+          const {updateDoc}=await import("firebase/firestore");
+          await updateDoc(doc(db,"properties",user.uid,"list",currentProp.id),{buildings});
+          setCurrentProp(p=>({...p,buildings}));
+          showToast("✅ Naves actualizadas");
+          setModal(null);
+        }}
+      />;
+    }
     if(modal.type==="renew-contract"){
       const ten=tenants.find(x=>x.id===modal.tenantId);
       return<RenewContractModal tenant={ten} onClose={()=>setModal(null)} onRenew={(months)=>renewContract(modal.tenantId,months)}/>;
@@ -2847,6 +2860,47 @@ function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
       <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.amount||!form.clientName}>
         💾 Guardar y descargar PDF
       </button>
+    </div>
+  );
+}
+
+function ManageBuildingsModal({prop,onClose,onSave}){
+  const [buildings,setBuildings]=useState([...(prop?.buildings||[])]);
+  const [newBuilding,setNewBuilding]=useState("");
+
+  const add=()=>{
+    if(!newBuilding.trim())return;
+    setBuildings(b=>[...b,newBuilding.trim()]);
+    setNewBuilding("");
+  };
+  const remove=(i)=>setBuildings(b=>b.filter((_,j)=>j!==i));
+
+  return(
+    <div className="modal" style={{maxWidth:440}}>
+      <div className="modal-hd">
+        <h3>⚙️ Gestionar naves · {prop?.name}</h3>
+        <button className="close-btn" onClick={onClose}>✕</button>
+      </div>
+      <div style={{marginBottom:12}}>
+        {buildings.map((b,i)=>(
+          <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+            <span style={{flex:1,fontSize:14}}>🏢 {b}</span>
+            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>remove(i)}>🗑️</button>
+          </div>
+        ))}
+        {buildings.length===0&&<p style={{fontSize:13,color:"var(--warm)"}}>No hay naves definidas</p>}
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        <input
+          value={newBuilding}
+          onChange={e=>setNewBuilding(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&add()}
+          placeholder="Nombre nave / edificio..."
+          style={{flex:1}}
+        />
+        <button className="btn btn-p" onClick={add} disabled={!newBuilding.trim()}>➕</button>
+      </div>
+      <button className="btn btn-p btn-full" onClick={()=>onSave(buildings)}>💾 Guardar cambios</button>
     </div>
   );
 }
