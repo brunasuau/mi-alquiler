@@ -846,7 +846,7 @@ export default function App() {
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
       if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
       if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
-      if(page==="trasteros")return<TrasterosPage tenants={tenants} units={units.filter(u=>!currentProp||u.propId===currentProp.id)} buildings={currentProp?.buildings||[]} propId={currentProp?.id||""} onSaveUnit={saveUnit} onDeleteUnit={deleteUnit}/>;
+      if(page==="trasteros")return<TrasterosPage tenants={tenants} units={units.filter(u=>!currentProp||u.propId===currentProp.id)} buildings={currentProp?.buildings||[]} propId={currentProp?.id||""} onSaveUnit={saveUnit} onDeleteUnit={deleteUnit} onAssignTenant={(unit)=>setModal({type:"assign-tenant",unit})}/>;
       if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
       if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
     }else{
@@ -863,6 +863,21 @@ export default function App() {
     if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} buildings={currentProp?.buildings||[]} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
     if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant} propBuildings={currentProp?.buildings||[]}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
+    if(modal.type==="assign-tenant"){
+      return<AssignTenantModal
+        unit={modal.unit}
+        buildings={currentProp?.buildings||[]}
+        onClose={()=>setModal(null)}
+        onSave={async(tenantData,contractData)=>{
+          const id=await createTenant({...tenantData,unit:modal.unit.name,building:modal.unit.building});
+          if(contractData&&id){
+            await saveContract({...contractData,tenantUid:id,date:today(),year:new Date().getFullYear()});
+          }
+          showToast("✅ Inquilino asignado"+(contractData?" · Contrato creado":""));
+          setModal(null);
+        }}
+      />;
+    }
     if(modal.type==="manage-buildings"){
       return<ManageBuildingsModal
         prop={currentProp}
@@ -2901,6 +2916,160 @@ function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
   );
 }
 
+function AssignTenantModal({unit,buildings,onClose,onSave}){
+  const [step,setStep]=useState(1); // 1=tenant data, 2=contract, 3=confirm
+  const [saving,setSaving]=useState(false);
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const now=new Date();
+  const today=`${now.getDate().toString().padStart(2,"0")}/${(now.getMonth()+1).toString().padStart(2,"0")}/${now.getFullYear()}`;
+
+  const [tenant,setTenant]=useState({
+    name:"",phone:"",email:"",rent:"",docType:"recibo",payFreq:"mensual",
+    ipcEnabled:"si",fianza:"no",fianzaAmount:"",notes:"",
+    contractStart:now.toISOString().split("T")[0],
+    contractEnd:"",rentRecibo:"",rentFactura:""
+  });
+  const [contract,setContract]=useState({
+    addContract:true,
+    signDay:String(now.getDate()),signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
+    startDay:"1",startMonth:monthNames[now.getMonth()],startYear:String(now.getFullYear()),
+    endDay:"",endMonth:"",endYear:"",
+  });
+  const setT=(k,v)=>setTenant(t=>({...t,[k]:v}));
+  const setC=(k,v)=>setContract(c=>({...c,[k]:v}));
+
+  const handleSave=async()=>{
+    setSaving(true);
+    const contractData=contract.addContract?{
+      ...contract, unit:unit.name, tenantName:tenant.name,
+      rent:tenant.rent, tenantDni:"", tenantAddress:""
+    }:null;
+    await onSave({...tenant,building:unit.building},contractData);
+    setSaving(false);
+  };
+
+  return(
+    <div className="modal" style={{maxWidth:500}}>
+      <div className="modal-hd">
+        <h3>➕ Asignar inquilino · {unit.name}</h3>
+        <button className="close-btn" onClick={onClose}>✕</button>
+      </div>
+
+      {/* Progress */}
+      <div style={{display:"flex",gap:4,marginBottom:16}}>
+        {[1,2,3].map(s=>(
+          <div key={s} style={{flex:1,height:4,borderRadius:4,background:step>=s?"var(--terra)":"var(--border)"}}/>
+        ))}
+      </div>
+
+      {step===1&&<>
+        <div style={{fontSize:12,color:"var(--warm)",marginBottom:12,fontWeight:600,textTransform:"uppercase"}}>Datos del inquilino</div>
+        <div className="fg"><label>Nombre *</label><input value={tenant.name} onChange={e=>setT("name",e.target.value)}/></div>
+        <div className="gr2">
+          <div className="fg"><label>Teléfono</label><input value={tenant.phone} onChange={e=>setT("phone",e.target.value)}/></div>
+          <div className="fg"><label>Email</label><input value={tenant.email} onChange={e=>setT("email",e.target.value)}/></div>
+        </div>
+        <div className="fg"><label>Alquiler €/mes *</label><input type="number" value={tenant.rent} onChange={e=>setT("rent",e.target.value)}/></div>
+        <div className="fg">
+          <label>🧾 Tipo documento</label>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            {["recibo","factura","ambos"].map(d=><button key={d} className={`btn btn-sm ${tenant.docType===d?"btn-p":"btn-o"}`} onClick={()=>setT("docType",d)}>{d.charAt(0).toUpperCase()+d.slice(1)}</button>)}
+          </div>
+        </div>
+        {tenant.docType==="ambos"&&<div className="gr2">
+          <div className="fg"><label>Importe Recibo €</label><input type="number" value={tenant.rentRecibo} onChange={e=>setT("rentRecibo",e.target.value)}/></div>
+          <div className="fg"><label>Importe Factura €</label><input type="number" value={tenant.rentFactura} onChange={e=>setT("rentFactura",e.target.value)}/></div>
+        </div>}
+        <div className="fg">
+          <label>📅 Frecuencia pago</label>
+          <select value={tenant.payFreq} onChange={e=>setT("payFreq",e.target.value)}>
+            {["mensual","2meses","3meses","4meses","6meses"].map(f=><option key={f} value={f}>{f==="mensual"?"Mensual":"Cada "+f.replace("meses"," meses")}</option>)}
+          </select>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Inicio contrato</label><input type="date" value={tenant.contractStart} onChange={e=>setT("contractStart",e.target.value)}/></div>
+          <div className="fg"><label>Fin contrato</label><input type="date" value={tenant.contractEnd} onChange={e=>setT("contractEnd",e.target.value)}/></div>
+        </div>
+        <div className="fg">
+          <label>📈 IPC anual</label>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button className={`btn btn-sm ${tenant.ipcEnabled==="si"?"btn-p":"btn-o"}`} onClick={()=>setT("ipcEnabled","si")}>✅ Sí</button>
+            <button className={`btn btn-sm ${tenant.ipcEnabled==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>setT("ipcEnabled","no")}>❌ No</button>
+          </div>
+        </div>
+        <div className="fg">
+          <label>🔒 Fianza</label>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button className={`btn btn-sm ${tenant.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>setT("fianza","si")}>✅ Sí</button>
+            <button className={`btn btn-sm ${tenant.fianza==="no"?"btn-o":"btn-o"}`} onClick={()=>setT("fianza","no")}>❌ No</button>
+          </div>
+          {tenant.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe €" value={tenant.fianzaAmount} onChange={e=>setT("fianzaAmount",e.target.value)}/>}
+        </div>
+        <div className="fg"><label>📝 Notas</label><textarea value={tenant.notes} onChange={e=>setT("notes",e.target.value)} rows={2} style={{width:"100%",padding:"8px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/></div>
+        <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!tenant.name||!tenant.rent}>Siguiente →</button>
+      </>}
+
+      {step===2&&<>
+        <div style={{fontSize:12,color:"var(--warm)",marginBottom:12,fontWeight:600,textTransform:"uppercase"}}>¿Crear contrato?</div>
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          <button className={`btn btn-sm ${contract.addContract?"btn-p":"btn-o"}`} onClick={()=>setC("addContract",true)}>📝 Sí, crear contrato</button>
+          <button className={`btn btn-sm ${!contract.addContract?"btn-s":"btn-o"}`} onClick={()=>setC("addContract",false)}>Sin contrato por ahora</button>
+        </div>
+        {contract.addContract&&<>
+          <div style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Fecha firma</div>
+          <div className="gr2" style={{marginBottom:8}}>
+            <div className="fg"><label>Día</label><input value={contract.signDay} onChange={e=>setC("signDay",e.target.value)}/></div>
+            <div className="fg"><label>Mes</label>
+              <select value={contract.signMonth} onChange={e=>setC("signMonth",e.target.value)}>
+                {["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"].map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Inicio contrato</div>
+          <div className="gr2" style={{marginBottom:8}}>
+            <div className="fg"><label>Día</label><input value={contract.startDay} onChange={e=>setC("startDay",e.target.value)}/></div>
+            <div className="fg"><label>Mes</label>
+              <select value={contract.startMonth} onChange={e=>setC("startMonth",e.target.value)}>
+                {["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"].map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Fin contrato</div>
+          <div className="gr2">
+            <div className="fg"><label>Día</label><input value={contract.endDay} onChange={e=>setC("endDay",e.target.value)}/></div>
+            <div className="fg"><label>Mes</label>
+              <select value={contract.endMonth} onChange={e=>setC("endMonth",e.target.value)}>
+                {["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"].map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="fg"><label>Año fin</label><input value={contract.endYear} onChange={e=>setC("endYear",e.target.value)} placeholder={String(new Date().getFullYear()+1)}/></div>
+        </>}
+        <div style={{display:"flex",gap:8,marginTop:8}}>
+          <button className="btn btn-o" onClick={()=>setStep(1)}>← Atrás</button>
+          <button className="btn btn-p btn-full" onClick={()=>setStep(3)}>Siguiente →</button>
+        </div>
+      </>}
+
+      {step===3&&<>
+        <div style={{fontSize:12,color:"var(--warm)",marginBottom:12,fontWeight:600,textTransform:"uppercase"}}>Confirmar</div>
+        <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:16,fontSize:13}}>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:8}}>{tenant.name}</div>
+          <div style={{color:"var(--warm)"}}>📦 {unit.name} · {unit.building}</div>
+          <div style={{color:"var(--warm)"}}>💶 {tenant.rent}€/mes · {tenant.docType} · {tenant.payFreq}</div>
+          {tenant.ipcEnabled==="si"&&<div style={{color:"var(--warm)"}}>📈 IPC activado</div>}
+          {tenant.fianza==="si"&&<div style={{color:"var(--warm)"}}>🔒 Fianza: {tenant.fianzaAmount}€</div>}
+          {contract.addContract&&<div style={{color:"var(--warm)",marginTop:4}}>📝 Contrato: {contract.startDay}/{contract.startMonth}/{contract.startYear||now.getFullYear()} → {contract.endDay}/{contract.endMonth}/{contract.endYear}</div>}
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o" onClick={()=>setStep(2)}>← Atrás</button>
+          <button className="btn btn-p btn-full" onClick={handleSave} disabled={saving}>{saving?"Guardando...":"✅ Confirmar y asignar"}</button>
+        </div>
+      </>}
+    </div>
+  );
+}
+
 function ManageBuildingsModal({prop,onClose,onSave}){
   const [buildings,setBuildings]=useState([...(prop?.buildings||[])]);
   const [newBuilding,setNewBuilding]=useState("");
@@ -2942,7 +3111,7 @@ function ManageBuildingsModal({prop,onClose,onSave}){
   );
 }
 
-function TrasterosPage({tenants,units,buildings,propId,onSaveUnit,onDeleteUnit}){
+function TrasterosPage({tenants,units,buildings,propId,onSaveUnit,onDeleteUnit,onAssignTenant}){
   const [adding,setAdding]=useState(false);
   const [newUnit,setNewUnit]=useState({name:"",building:buildings[0]||""});
   const getBuildingColor=(b,i)=>["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"][i%7];
@@ -3024,6 +3193,7 @@ function TrasterosPage({tenants,units,buildings,propId,onSaveUnit,onDeleteUnit})
                     <div style={{display:"flex",gap:6,alignItems:"center"}}>
                       {!occupant&&<span className="badge" style={{background:"#E6F4ED",color:"#4A9B6F",fontSize:11}}>LIBRE</span>}
                       {occupant&&<span className="badge" style={{background:"#FDECEA",color:"#D94F3D",fontSize:11}}>OCUPADO</span>}
+                      {!occupant&&<button className="btn btn-p btn-sm" onClick={()=>onAssignTenant(unit)}>➕ Asignar</button>}
                       <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar esta unidad?"))onDeleteUnit(unit.id);}}>🗑️</button>
                     </div>
                   </div>
