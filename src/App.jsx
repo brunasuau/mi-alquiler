@@ -3037,4 +3037,3 @@ function StatusBadge({status,t}){
   const s=map[status]||{bg:"#F0ECE8",color:"#8C7B6E",label:status};
   return<span className="badge" style={{background:s.bg,color:s.color}}>{s.label}</span>;
 }
-s
