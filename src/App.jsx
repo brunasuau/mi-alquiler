@@ -531,10 +531,12 @@ export default function App() {
   const [contracts,setContracts]=useState([]);
   const [properties,setProperties]=useState([]);
   const [currentProp,setCurrentProp]=useState(null); // {id, name, buildings:[]}
+  const [units,setUnits]=useState([]); // [{id, name, building, propId}]
 
   const t=T[lang||"es"];
   const isOwner=profile?.role==="owner";
   const anniversaries=isOwner?checkIPC(tenants):[];
+  const freeUnits=isOwner?units.filter(u=>(!currentProp||u.propId===currentProp.id)&&!tenants.find(t=>t.unit===u.name&&t.building===u.building)):[];
 
   useEffect(()=>{
     const unsub=onAuthStateChanged(auth,async(u)=>{
@@ -561,6 +563,22 @@ export default function App() {
       }
     });
   },[user,isOwner]);
+
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"units",user.uid,"list"),snap=>{
+      setUnits(snap.docs.map(d=>({id:d.id,...d.data()})));
+    });
+  },[user,isOwner]);
+
+  async function saveUnit(unit){
+    await addDoc(collection(db,"units",user.uid,"list"),{...unit,createdAt:serverTimestamp()});
+  }
+  async function deleteUnit(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"units",user.uid,"list",id));
+    showToast("🗑️ Unidad eliminada");
+  }
 
   useEffect(()=>{
     if(!isOwner)return;
@@ -658,6 +676,7 @@ export default function App() {
     {id:"contratos",icon:"📝",label:t.contracts},
     {id:"facturas",icon:"🧾",label:"Facturas"},
     {id:"recibos",icon:"🖨️",label:"Recibos"},
+    {id:"trasteros",icon:"📦",label:"Trasteros"},
   ];
   const tenantNav=[
     {id:"t-home",icon:"🏠",label:t.myHome},
@@ -816,6 +835,7 @@ export default function App() {
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
       if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
       if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
+      if(page==="trasteros")return<TrasterosPage tenants={tenants} units={units.filter(u=>!currentProp||u.propId===currentProp.id)} buildings={currentProp?.buildings||[]} propId={currentProp?.id||""} onSaveUnit={saveUnit} onDeleteUnit={deleteUnit}/>;
       if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
       if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
     }else{
@@ -924,14 +944,22 @@ export default function App() {
             {isOwner&&(
               <div className="notif-wrap">
                 <button className="notif-btn" onClick={e=>{e.stopPropagation();setShowNotif(v=>!v);}}>
-                  🔔{anniversaries.length>0&&<span className="notif-dot"/>}
+                  🔔{(anniversaries.length>0||freeUnits.length>0)&&<span className="notif-dot"/>}
                 </button>
                 {showNotif&&(
                   <div className="notif-panel" onClick={e=>e.stopPropagation()}>
                     <div className="notif-panel-title">{t.notifications}</div>
-                    {anniversaries.length===0
+                    {anniversaries.length===0&&freeUnits.length===0
                       ?<div style={{fontSize:13,color:"var(--warm)"}}>{t.noNotifications}</div>
-                      :anniversaries.map((a,i)=>(
+                      :<>
+                      {freeUnits.map((u,i)=>(
+                        <div key={"free"+i} className="notif-item">
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                            <span>🟢 <strong>{u.name}</strong> · {u.building} — Libre</span>
+                          </div>
+                        </div>
+                      ))}
+                      {anniversaries.map((a,i)=>(
                         <div key={i} className="notif-item">
                           {a.type==="ipc"&&`📈 ${a.tenant.name} · Subida IPC (${a.years} año/s) · desde ${a.tenant.contractStart}`}
                           {a.type==="signed_today"&&`📝 ${a.tenant.name} · ${t.contractSigned} ${a.tenant.contractStart}`}
@@ -943,6 +971,7 @@ export default function App() {
                           )}
                         </div>
                       ))}
+                      </>}
                   </div>
                 )}
               </div>
@@ -953,6 +982,15 @@ export default function App() {
         <main className="content fade" key={page} style={{marginLeft:sidebarOpen?"220px":"64px",transition:"margin-left .25s",minWidth:0,width:"100%"}} onClick={()=>setShowNotif(false)}>
           {!sidebarOpen&&<button className="hamburger-btn" onClick={e=>{e.stopPropagation();setSidebarOpen(true);}}>☰</button>}
           {saving&&<div className="saving">{t.saving}</div>}
+          {isOwner&&freeUnits.length>0&&page==="dashboard"&&freeUnits.map((u,i)=>(
+            <div key={"fu"+i} className="alert-banner" style={{borderLeft:"4px solid #4A9B6F"}}>
+              <div className="al-icon">🟢</div>
+              <div>
+                <div className="al-title">Unidad libre · {u.name}</div>
+                <div className="al-sub">{u.building}</div>
+              </div>
+            </div>
+          ))}
           {isOwner&&anniversaries.length>0&&page==="dashboard"&&anniversaries.map((a,i)=>(
             <div key={i} className="alert-banner">
               <div className="al-icon">{a.type==="expiring"?"⚠️":"🎂"}</div>
@@ -2813,6 +2851,123 @@ function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
   );
 }
 
+function TrasterosPage({tenants,units,buildings,propId,onSaveUnit,onDeleteUnit}){
+  const [adding,setAdding]=useState(false);
+  const [newUnit,setNewUnit]=useState({name:"",building:buildings[0]||""});
+  const getBuildingColor=(b,i)=>["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"][i%7];
+
+  // Group units by building
+  const allBuildings=[...new Set([...buildings,...units.map(u=>u.building)].filter(Boolean))];
+  const getOccupant=(unit)=>tenants.find(t=>t.unit===unit.name&&t.building===unit.building);
+
+  const totalFree=units.filter(u=>!getOccupant(u)).length;
+  const totalOccupied=units.filter(u=>!!getOccupant(u)).length;
+
+  const handleAdd=async()=>{
+    if(!newUnit.name.trim())return;
+    await onSaveUnit({...newUnit,propId,name:newUnit.name.trim()});
+    setNewUnit({name:"",building:buildings[0]||""});
+    setAdding(false);
+  };
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <h2>📦 Trasteros</h2>
+          <p>{units.length} unidades · <span style={{color:"#4A9B6F",fontWeight:600}}>{totalOccupied} ocupadas</span> · <span style={{color:"#D94F3D",fontWeight:600}}>{totalFree} libres</span></p>
+        </div>
+        <button className="btn btn-p" onClick={()=>setAdding(v=>!v)}>➕ Añadir unidad</button>
+      </div>
+
+      {adding&&(
+        <div className="card" style={{marginBottom:16}}>
+          <div className="card-title">Nueva unidad</div>
+          <div className="gr2">
+            <div className="fg"><label>Nombre / Código</label>
+              <input value={newUnit.name} onChange={e=>setNewUnit(u=>({...u,name:e.target.value}))} placeholder="Ej: Trastero 7, Local 2..."/>
+            </div>
+            <div className="fg"><label>Nave</label>
+              <select value={newUnit.building} onChange={e=>setNewUnit(u=>({...u,building:e.target.value}))}>
+                {buildings.filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
+                <option value="">Sin nave</option>
+              </select>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn btn-o" onClick={()=>setAdding(false)}>Cancelar</button>
+            <button className="btn btn-p" onClick={handleAdd} disabled={!newUnit.name.trim()}>✅ Guardar</button>
+          </div>
+        </div>
+      )}
+
+      {allBuildings.length===0&&units.length===0&&(
+        <div className="card"><p style={{textAlign:"center",color:"var(--warm)",padding:20}}>No hay unidades definidas. Añade la primera.</p></div>
+      )}
+
+      {allBuildings.map((building,bi)=>{
+        const buildingUnits=units.filter(u=>u.building===building);
+        if(buildingUnits.length===0)return null;
+        const free=buildingUnits.filter(u=>!getOccupant(u)).length;
+        return(
+          <div key={building} style={{marginBottom:16,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+            <div style={{background:getBuildingColor(building,bi),color:"white",padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {building}</div>
+              <div style={{fontSize:12,opacity:.85}}>{buildingUnits.length} unidades · {free} libre{free!==1?"s":""}</div>
+            </div>
+            <div style={{background:"white"}}>
+              {buildingUnits.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true})).map(unit=>{
+                const occupant=getOccupant(unit);
+                return(
+                  <div key={unit.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
+                    <div style={{width:10,height:10,borderRadius:"50%",background:occupant?"#D94F3D":"#4A9B6F",flexShrink:0}}/>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:600,fontSize:14}}>{unit.name}</div>
+                      {occupant
+                        ?<div style={{fontSize:12,color:"var(--warm)",marginTop:2}}>
+                          👤 {occupant.name} · {occupant.rent}€/mes · hasta {occupant.contractEnd||"—"}
+                        </div>
+                        :<div style={{fontSize:12,color:"#4A9B6F",fontWeight:600,marginTop:2}}>🟢 Libre</div>
+                      }
+                    </div>
+                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                      {!occupant&&<span className="badge" style={{background:"#E6F4ED",color:"#4A9B6F",fontSize:11}}>LIBRE</span>}
+                      {occupant&&<span className="badge" style={{background:"#FDECEA",color:"#D94F3D",fontSize:11}}>OCUPADO</span>}
+                      <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar esta unidad?"))onDeleteUnit(unit.id);}}>🗑️</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Units without building */}
+      {units.filter(u=>!u.building).length>0&&(
+        <div style={{marginBottom:16,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+          <div style={{background:"#8C7B6E",color:"white",padding:"12px 16px",fontFamily:"'DM Serif Display',serif",fontSize:16}}>Sin nave asignada</div>
+          <div style={{background:"white"}}>
+            {units.filter(u=>!u.building).map(unit=>{
+              const occupant=getOccupant(unit);
+              return(
+                <div key={unit.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
+                  <div style={{width:10,height:10,borderRadius:"50%",background:occupant?"#D94F3D":"#4A9B6F",flexShrink:0}}/>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:600,fontSize:14}}>{unit.name}</div>
+                    {occupant?<div style={{fontSize:12,color:"var(--warm)",marginTop:2}}>👤 {occupant.name} · {occupant.rent}€/mes</div>:<div style={{fontSize:12,color:"#4A9B6F",fontWeight:600}}>🟢 Libre</div>}
+                  </div>
+                  <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar?"))onDeleteUnit(unit.id);}}>🗑️</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RenewContractModal({tenant,onClose,onRenew}){
   const [months,setMonths]=useState("12");
   const [preview,setPreview]=useState(null);
@@ -2882,3 +3037,4 @@ function StatusBadge({status,t}){
   const s=map[status]||{bg:"#F0ECE8",color:"#8C7B6E",label:status};
   return<span className="badge" style={{background:s.bg,color:s.color}}>{s.label}</span>;
 }
+s
