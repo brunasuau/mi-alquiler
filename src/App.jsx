@@ -659,11 +659,22 @@ export default function App() {
   if(user===undefined)return(<><style>{css}</style><div style={{minHeight:"100vh",background:"#1A1612",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:"#8C7B6E",fontFamily:"'DM Sans',sans-serif"}}>Cargando...</p></div></>);
   if(!lang&&!user)return(<><style>{css}</style><LangSelect onSelect={setLang}/></>);
   if(!user)return(<><style>{css}</style><LoginScreen t={t} onLogin={(u,p)=>{setUser(u);setProfile(p);setPage(p.role==="owner"?"dashboard":"t-home");}}/></>);
-  if(isOwner&&!currentProp)return(<><style>{css}</style><PropertySelector user={user} properties={properties} onSelect={setCurrentProp} onCreateProp={async(name,buildings)=>{
-    const ref=await addDoc(collection(db,"properties",user.uid,"list"),{name,buildings,createdAt:serverTimestamp()});
-    // Migrate existing tenants to this prop if it's the first one
-    showToast("✅ Propiedad '"+name+"' creada");
-  }}/></>);
+  if(isOwner&&!currentProp)return(<><style>{css}</style><PropertySelector user={user} properties={properties} onSelect={setCurrentProp}
+    onCreateProp={async(name,buildings)=>{
+      await addDoc(collection(db,"properties",user.uid,"list"),{name,buildings,createdAt:serverTimestamp()});
+      showToast("✅ Propiedad '"+name+"' creada");
+    }}
+    onUpdateProp={async(id,name,buildings)=>{
+      const {updateDoc}=await import("firebase/firestore");
+      await updateDoc(doc(db,"properties",user.uid,"list",id),{name,buildings});
+      showToast("✅ Propiedad actualizada");
+    }}
+    onDeleteProp={async(id)=>{
+      const {deleteDoc}=await import("firebase/firestore");
+      await deleteDoc(doc(db,"properties",user.uid,"list",id));
+      showToast("🗑️ Propiedad eliminada");
+    }}
+  /></>);
 
   const ownerNav=[
     {id:"dashboard",icon:"📊",label:t.dashboard},
@@ -828,7 +839,7 @@ export default function App() {
   const renderPage=()=>{
     if(isOwner){
       if(page==="dashboard")return<Dashboard t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})}/>;
-      if(page==="tenants")return<Tenants t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
+      if(page==="tenants")return<Tenants t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})} onDelete={id=>{if(confirm("¿Eliminar este inquilino? Se borrarán todos sus datos."))deleteTenant(id);}}/>;
       if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onDeleteCost={deleteCost}/>;
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
@@ -1033,78 +1044,103 @@ export default function App() {
   );
 }
 
-function PropertySelector({user,properties,onSelect,onCreateProp}){
+function PropertySelector({user,properties,onSelect,onCreateProp,onUpdateProp,onDeleteProp}){
   const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
   const [name,setName]=useState("");
   const [buildings,setBuildings]=useState([""]);
+  const [editName,setEditName]=useState("");
+  const [editBuildings,setEditBuildings]=useState([]);
 
   const handleCreate=async()=>{
     if(!name.trim())return;
-    const cleanBuildings=buildings.filter(b=>b.trim());
-    await onCreateProp(name.trim(),cleanBuildings);
+    await onCreateProp(name.trim(),buildings.filter(b=>b.trim()));
     setCreating(false);setName("");setBuildings([""]);
   };
-
-  const addBuilding=()=>setBuildings(b=>[...b,""]);
-  const setBuilding=(i,v)=>setBuildings(b=>b.map((x,j)=>j===i?v:x));
-  const removeBuilding=(i)=>setBuildings(b=>b.filter((_,j)=>j!==i));
-
+  const handleEdit=(p,e)=>{e.stopPropagation();setEditing(p);setEditName(p.name);setEditBuildings([...(p.buildings||[])]);};
+  const handleSaveEdit=async()=>{
+    await onUpdateProp(editing.id,editName.trim(),editBuildings.filter(b=>b.trim()));
+    setEditing(null);
+  };
+  const addB=()=>setBuildings(b=>[...b,""]);
+  const setB=(i,v)=>setBuildings(b=>b.map((x,j)=>j===i?v:x));
+  const remB=(i)=>setBuildings(b=>b.filter((_,j)=>j!==i));
+  const addEB=()=>setEditBuildings(b=>[...b,""]);
+  const setEB=(i,v)=>setEditBuildings(b=>b.map((x,j)=>j===i?v:x));
+  const remEB=(i)=>setEditBuildings(b=>b.filter((_,j)=>j!==i));
   const colors=["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"];
+  const iS={width:"100%",background:"#1A1612",border:"1px solid #3A2E28",borderRadius:8,padding:"8px 12px",color:"#F5EFE8",fontFamily:"'DM Sans',sans-serif",fontSize:13,boxSizing:"border-box"};
 
   return(
     <div style={{minHeight:"100vh",background:"#1A1612",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'DM Sans',sans-serif"}}>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:36,color:"#F5EFE8",marginBottom:6}}>Mi<span style={{color:"#C4622D",fontStyle:"italic"}}>Alquiler</span></div>
       <div style={{color:"#8C7B6E",fontSize:14,marginBottom:32}}>Selecciona una propiedad para continuar</div>
-
       <div style={{width:"100%",maxWidth:500}}>
-        {properties.length>0&&(
-          <>
-            <div style={{color:"#8C7B6E",fontSize:12,textTransform:"uppercase",letterSpacing:".7px",marginBottom:12}}>Tus propiedades</div>
-            {properties.map((p,i)=>(
-              <div key={p.id} onClick={()=>onSelect(p)} style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:"16px 20px",marginBottom:10,cursor:"pointer",display:"flex",alignItems:"center",gap:14,transition:"all .2s"}}
-                onMouseEnter={e=>e.currentTarget.style.border="1px solid #C4622D"}
-                onMouseLeave={e=>e.currentTarget.style.border="1px solid #3A2E28"}>
-                <div style={{width:44,height:44,borderRadius:12,background:colors[i%colors.length],display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>🏢</div>
-                <div style={{flex:1}}>
-                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8"}}>{p.name}</div>
-                  {p.buildings?.length>0&&<div style={{fontSize:12,color:"#8C7B6E",marginTop:2}}>{p.buildings.join(" · ")}</div>}
-                </div>
-                <div style={{color:"#C4622D",fontSize:20}}>›</div>
+        {properties.length>0&&<>
+          <div style={{color:"#8C7B6E",fontSize:12,textTransform:"uppercase",letterSpacing:".7px",marginBottom:12}}>Tus propiedades</div>
+          {properties.map((p,i)=>(
+            editing?.id===p.id
+            ?<div key={p.id} style={{background:"#261F1B",border:"1px solid #C4622D",borderRadius:14,padding:20,marginBottom:10}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:"#F5EFE8",marginBottom:12}}>✏️ Editar propiedad</div>
+              <div style={{marginBottom:10}}>
+                <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Nombre</label>
+                <input value={editName} onChange={e=>setEditName(e.target.value)} style={iS}/>
               </div>
-            ))}
-            <div style={{height:16}}/>
-          </>
-        )}
-
-        {!creating?(
-          <button onClick={()=>setCreating(true)} style={{width:"100%",background:"none",border:"2px dashed #3A2E28",borderRadius:14,padding:"16px",color:"#8C7B6E",cursor:"pointer",fontSize:14,fontFamily:"'DM Sans',sans-serif",transition:"all .2s"}}
+              <div style={{marginBottom:10}}>
+                <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Naves / Edificios</label>
+                {editBuildings.map((b,j)=>(
+                  <div key={j} style={{display:"flex",gap:6,marginBottom:6}}>
+                    <input value={b} onChange={e=>setEB(j,e.target.value)} placeholder={"Nave "+(j+1)} style={iS}/>
+                    <button onClick={()=>remEB(j)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:18}}>✕</button>
+                  </div>
+                ))}
+                <button onClick={addEB} style={{background:"none",border:"none",color:"#C4622D",cursor:"pointer",fontSize:13,padding:0}}>+ Añadir nave</button>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:12}}>
+                <button onClick={()=>setEditing(null)} style={{flex:1,background:"none",border:"1px solid #3A2E28",borderRadius:10,padding:"10px",color:"#8C7B6E",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Cancelar</button>
+                <button onClick={handleSaveEdit} disabled={!editName.trim()} style={{flex:2,background:"#C4622D",border:"none",borderRadius:10,padding:"10px",color:"white",cursor:"pointer",fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>💾 Guardar</button>
+              </div>
+            </div>
+            :<div key={p.id} style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:"16px 20px",marginBottom:10,display:"flex",alignItems:"center",gap:14}}>
+              <div onClick={()=>onSelect(p)} style={{width:44,height:44,borderRadius:12,background:colors[i%colors.length],display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0,cursor:"pointer"}}>🏢</div>
+              <div onClick={()=>onSelect(p)} style={{flex:1,cursor:"pointer"}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8"}}>{p.name}</div>
+                {p.buildings?.filter(b=>b).length>0&&<div style={{fontSize:12,color:"#8C7B6E",marginTop:2}}>{p.buildings.filter(b=>b).join(" · ")}</div>}
+              </div>
+              <button onClick={e=>handleEdit(p,e)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:15,padding:"4px 6px"}} title="Editar">✏️</button>
+              <button onClick={e=>{e.stopPropagation();if(window.confirm("¿Eliminar '"+p.name+"'? Los inquilinos no se borrarán."))onDeleteProp(p.id);}} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:15,padding:"4px 6px"}} title="Eliminar">🗑️</button>
+              <div onClick={()=>onSelect(p)} style={{color:"#C4622D",fontSize:20,cursor:"pointer"}}>›</div>
+            </div>
+          ))}
+          <div style={{height:16}}/>
+        </>}
+        {!creating
+          ?<button onClick={()=>setCreating(true)} style={{width:"100%",background:"none",border:"2px dashed #3A2E28",borderRadius:14,padding:"16px",color:"#8C7B6E",cursor:"pointer",fontSize:14,fontFamily:"'DM Sans',sans-serif"}}
             onMouseEnter={e=>{e.currentTarget.style.borderColor="#C4622D";e.currentTarget.style.color="#F5EFE8";}}
             onMouseLeave={e=>{e.currentTarget.style.borderColor="#3A2E28";e.currentTarget.style.color="#8C7B6E";}}>
             ➕ Añadir nueva propiedad
           </button>
-        ):(
-          <div style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:20}}>
+          :<div style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:20}}>
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8",marginBottom:16}}>Nueva propiedad</div>
             <div style={{marginBottom:12}}>
               <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Nombre de la propiedad</label>
-              <input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: Calafell, Barcelona, Oficinas..." style={{width:"100%",background:"#1A1612",border:"1px solid #3A2E28",borderRadius:8,padding:"10px 12px",color:"#F5EFE8",fontFamily:"'DM Sans',sans-serif",fontSize:14,boxSizing:"border-box"}}/>
+              <input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: Calafell, Barcelona..." style={{...iS,padding:"10px 12px"}}/>
             </div>
             <div style={{marginBottom:12}}>
               <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Naves / Edificios (opcional)</label>
               {buildings.map((b,i)=>(
                 <div key={i} style={{display:"flex",gap:6,marginBottom:6}}>
-                  <input value={b} onChange={e=>setBuilding(i,e.target.value)} placeholder={`Nave ${i+1}`} style={{flex:1,background:"#1A1612",border:"1px solid #3A2E28",borderRadius:8,padding:"8px 12px",color:"#F5EFE8",fontFamily:"'DM Sans',sans-serif",fontSize:13}}/>
-                  {buildings.length>1&&<button onClick={()=>removeBuilding(i)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:18}}>✕</button>}
+                  <input value={b} onChange={e=>setB(i,e.target.value)} placeholder={"Nave "+(i+1)} style={iS}/>
+                  {buildings.length>1&&<button onClick={()=>remB(i)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:18}}>✕</button>}
                 </div>
               ))}
-              <button onClick={addBuilding} style={{background:"none",border:"none",color:"#C4622D",cursor:"pointer",fontSize:13,padding:0}}>+ Añadir nave</button>
+              <button onClick={addB} style={{background:"none",border:"none",color:"#C4622D",cursor:"pointer",fontSize:13,padding:0}}>+ Añadir nave</button>
             </div>
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button onClick={()=>setCreating(false)} style={{flex:1,background:"none",border:"1px solid #3A2E28",borderRadius:10,padding:"10px",color:"#8C7B6E",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Cancelar</button>
               <button onClick={handleCreate} disabled={!name.trim()} style={{flex:2,background:"#C4622D",border:"none",borderRadius:10,padding:"10px",color:"white",cursor:"pointer",fontWeight:600,fontFamily:"'DM Sans',sans-serif",opacity:name.trim()?1:.5}}>Crear propiedad</button>
             </div>
-          </div>
-        )}
+          </div>}
       </div>
     </div>
   );
@@ -1192,7 +1228,7 @@ function Dashboard({t,tenants,onSelect}){
   );
 }
 
-function Tenants({t,tenants,onSelect,onNew,onEdit,buildings=[]}){
+function Tenants({t,tenants,onSelect,onNew,onEdit,onDelete,buildings=[]}){
   buildings=buildings.filter(b=>b);
   const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
   const groups={};
@@ -1218,6 +1254,7 @@ function Tenants({t,tenants,onSelect,onNew,onEdit,buildings=[]}){
       </div>
       <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
       <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
+      <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDelete(ten.id)}>🗑️</button>
     </div>
   );
 
