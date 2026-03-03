@@ -457,57 +457,63 @@ function NewContractModal({t,onClose,onSave}){
       {step===1&&<>
         <div className="modal-hd"><h3>📋 Datos del contrato</h3><button className="close-btn" onClick={onClose}>✕</button></div>
         {bar(1,4)}
+        <p style={{fontSize:12,color:"var(--warm)",marginBottom:12}}>Rellena los campos que aparecen en la plantilla del contrato.</p>
+
+        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8}}>📦 Trastero</div>
         <div className="gr2">
-          <div className="fg"><label>Nº Trastero *</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Trastero 7"/></div>
-          <div className="fg"><label>Nave *</label><input value={form.building} onChange={e=>set("building",e.target.value)} placeholder="Ej: Nau A"/></div>
+          <div className="fg"><label>Número de trastero *</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: 7"/></div>
+          <div className="fg"><label>Nave *</label><input value={form.building} onChange={e=>set("building",e.target.value)} placeholder="Ej: Nave Industrial A"/></div>
         </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8,marginTop:4}}>👤 Inquilino (arrendatario)</div>
         <div className="gr2">
-          <div className="fg"><label>Nombre inquilino *</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/></div>
-          <div className="fg"><label>DNI inquilino *</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/></div>
+          <div className="fg"><label>Nombre completo *</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)} placeholder="Nombre y apellidos / Razón social"/></div>
+          <div className="fg"><label>DNI / NIF *</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/></div>
         </div>
-        <div className="fg"><label>Domicilio del inquilino *</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/></div>
+        <div className="fg"><label>Domicilio del inquilino *</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, piso, ciudad"/></div>
+
+        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8,marginTop:4}}>💶 Alquiler</div>
+        <div className="fg"><label>Renta mensual (€) *</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)} placeholder="Ej: 250"/></div>
+
+        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8,marginTop:4}}>⏱️ Duración</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:10}}>
+          {DURATION_PRESETS.map(p=>(
+            <button key={p.months} className={`btn btn-sm ${form.durationMonths===String(p.months)?"btn-p":"btn-o"}`}
+              onClick={()=>{set("durationMonths",String(p.months));set("durationText",p.text);}}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:12}}>
+          <input type="number" min="1" value={form.durationMonths} onChange={e=>{
+            const m=e.target.value;
+            const preset=DURATION_PRESETS.find(p=>String(p.months)===m);
+            set("durationMonths",m);
+            set("durationText",preset?preset.text:m+(parseInt(m)===1?" MES":" MESES"));
+          }} style={{width:80}}/>
+          <span style={{fontSize:13,color:"var(--warm)"}}>meses (personalizado)</span>
+        </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8}}>📅 Fechas</div>
         <div className="gr2">
-          <div className="fg"><label>Teléfono</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
-          <div className="fg"><label>Alquiler €/mes *</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
-        </div>
-        <hr/>
-        <div className="fg">
-          <label>⏱️ Duración del contrato</label>
-          <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:8,marginBottom:10}}>
-            {DURATION_PRESETS.map(p=>(
-              <button key={p.months} className={`btn btn-sm ${form.durationMonths===String(p.months)?"btn-p":"btn-o"}`}
-                onClick={()=>{set("durationMonths",String(p.months));set("durationText",p.text);}}>
-                {p.label}
-              </button>
-            ))}
-          </div>
-          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <input type="number" min="1" value={form.durationMonths} onChange={e=>{
-              const m=e.target.value;
-              const preset=DURATION_PRESETS.find(p=>String(p.months)===m);
-              set("durationMonths",m);
-              set("durationText",preset?preset.text:m+" MES"+(parseInt(m)===1?"":"ES"));
-            }} style={{width:80}} placeholder="meses"/>
-            <span style={{fontSize:13,color:"var(--warm)"}}>meses personalizados</span>
-          </div>
-        </div>
-        <div className="gr2">
-          <div className="fg"><label>📅 Fecha inicio</label><input type="date" value={form.startISO} onChange={e=>set("startISO",e.target.value)}/></div>
-          <div className="fg"><label>📅 Fecha firma</label>
+          <div className="fg"><label>Fecha inicio contrato</label><input type="date" value={form.startISO} onChange={e=>set("startISO",e.target.value)}/></div>
+          <div className="fg"><label>Fecha firma del contrato</label>
             <div style={{display:"flex",gap:4}}>
-              <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)}/>
-              <select value={form.signMonth} onChange={e=>set("signMonth",e.target.value)}>
+              <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
+              <select value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} style={{flex:1}}>
                 {monthNames.map(m=><option key={m} value={m}>{m}</option>)}
               </select>
-              <input style={{width:52}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+              <input style={{width:54}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
             </div>
           </div>
         </div>
-        {form.startISO&&<div style={{background:"var(--cream)",borderRadius:10,padding:10,fontSize:13,marginBottom:12}}>
-          📅 Del <strong>{startFmt.day} de {startFmt.month} de {startFmt.year}</strong> al <strong>{endFmt.day} de {endFmt.month} de {endFmt.year}</strong> · <strong>{form.durationText}</strong>
+
+        {form.startISO&&<div style={{background:"#E6F4ED",border:"1px solid #4A9B6F",borderRadius:10,padding:10,fontSize:13,marginBottom:12}}>
+          📅 <strong>{startFmt.day} de {startFmt.month} de {startFmt.year}</strong> → <strong>{endFmt.day} de {endFmt.month} de {endFmt.year}</strong> &nbsp;·&nbsp; <strong>{form.durationText}</strong>
         </div>}
+
         <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.unit||!form.tenantName||!form.tenantDni||!form.tenantAddress||!form.rent}>
-          Siguiente → Firma inquilino
+          Siguiente → Firma del inquilino ›
         </button>
       </>}
 
