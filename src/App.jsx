@@ -124,181 +124,165 @@ function generateContractPDF(data) {
 
   const d = new jsPDF({ format:"a4", unit:"mm" });
   const lm=20, rm=190, maxW=rm-lm;
-  let y=20;
-  const lh=5.5;
+  let y=25;
+  const lh=5.8;
 
-  function checkPage(needed=10){ if(y+needed>280){d.addPage();y=20;} }
-  function space(n=3){y+=n;}
+  function checkPage(n=12){ if(y+n>282){d.addPage();y=20;} }
+  function sp(n=4){y+=n;}
 
-  function addPara(segments, indent=0){
+  // Render mixed bold/normal paragraph with word-wrap
+  function para(segs, extraAfter=3){
     d.setFontSize(10);
-    let words=[];
-    segments.forEach(seg=>{
-      seg.text.split(" ").forEach(w=>{ if(w) words.push({w,bold:seg.bold}); });
+    // flatten to word tokens
+    let tokens=[];
+    segs.forEach(s=>{
+      const words=s.text.split(/( )/);
+      words.forEach(w=>{ if(w!=="")tokens.push({w,bold:!!s.bold}); });
     });
-    let lines=[[]]; let lineW=0; const avail=maxW-indent;
-    words.forEach(({w,bold})=>{
-      d.setFont("helvetica",bold?"bold":"normal");
-      const ww=d.getTextWidth(w+" ");
-      if(lineW+ww>avail && lines[lines.length-1].length>0){ lines.push([]); lineW=0; }
-      lines[lines.length-1].push({w,bold}); lineW+=ww;
+    let lines=[[]]; let lw=0;
+    tokens.forEach(tok=>{
+      d.setFont("helvetica",tok.bold?"bold":"normal");
+      const tw=d.getTextWidth(tok.w);
+      if(lw+tw>maxW && lines[lines.length-1].length>0){lines.push([]);lw=0;}
+      lines[lines.length-1].push(tok); lw+=tw;
     });
     lines.forEach(line=>{
       checkPage();
-      let cx=lm+indent;
-      line.forEach(({w,bold})=>{
-        d.setFont("helvetica",bold?"bold":"normal");
-        d.text(w+" ",cx,y); cx+=d.getTextWidth(w+" ");
+      let cx=lm;
+      line.forEach(tok=>{
+        d.setFont("helvetica",tok.bold?"bold":"normal");
+        d.text(tok.w,cx,y); cx+=d.getTextWidth(tok.w);
       });
       y+=lh;
     });
-    y+=1.5;
+    y+=extraAfter;
   }
 
-  function heading(text){
-    checkPage(8);
+  function t(txt,bold=false){ return {text:txt,bold}; }
+
+  function title(txt){
+    checkPage(10);
+    d.setFont("helvetica","bold"); d.setFontSize(13);
+    d.text(txt,105,y,{align:"center"}); y+=9; d.setFontSize(10);
+  }
+  function clausula(label){
+    checkPage(8); sp(1);
     d.setFont("helvetica","bold"); d.setFontSize(10);
-    d.text(text,lm,y); y+=lh+1;
+    d.text(label,lm,y); y+=lh+1;
   }
-  function centered(text,size=13,bold=true){
-    checkPage(8);
-    d.setFont("helvetica",bold?"bold":"normal"); d.setFontSize(size);
-    d.text(text,105,y,{align:"center"}); y+=size*0.4+2;
-    d.setFontSize(10);
+  function seccion(label){
+    checkPage(8); sp(2);
+    d.setFont("helvetica","bold"); d.setFontSize(10);
+    d.text(label,lm,y); y+=lh+1;
   }
 
-  // ── HEADER ──
-  centered("CONTRATO DE ALQUILER PARA USO DISTINTO A VIVIENDA",12);
-  space(2);
-  addPara([{text:`En Calafell, a ${signDay} de ${signMonth} de ${signYear}`}]);
-  space();
+  // ─── CABECERA ───────────────────────────────────────────
+  title("CONTRATO DE ALQUILER PARA USO DISTINTO A VIVIENDA");
+  sp(2);
+  para([t("En Calafell, a "),t(signDay+" de "+signMonth+" de "+signYear,true)]);
+  sp(2);
 
-  // ── REUNIDOS ──
-  heading("R E U N I D O S:");
-  addPara([
-    {text:"De una parte, "},{text:"Joana Solé Santacana",bold:true},
-    {text:", mayor de edad, con domicilio a estos efectos en el Passeig Marítim Sant Joan de Déu núm. 90, Esc. B, 5º 2ª de Calafell, provista de DNI número "},{text:"36618190T",bold:true},{text:"."}
-  ]);
-  addPara([
-    {text:"De otra, Sr/a. "},{text:tenantName,bold:true},
-    {text:", mayor de edad, con domicilio a estos efectos en "},{text:tenantAddress,bold:true},
-    {text:", provista/o de DNI número "},{text:tenantDni,bold:true},{text:"."}
-  ]);
-  addPara([{text:"Después de reconocerse mutua y recíprocamente la legal y precisa capacidad legal para obligar y obligarse, haciéndolo libre y voluntariamente,"}]);
-  space();
+  // ─── REUNIDOS ───────────────────────────────────────────
+  seccion("R E U N I D O S:");
+  para([t("De una parte, "),t("Joana Solé Santacana",true),t(", mayor de edad, con domicilio a estos efectos en el Passeig Marítim Sant Joan de Déu núm. 90, Esc. B, 5º 2ª de Calafell, provista de DNI número "),t("36618190T",true),t(".")]);
+  para([t("De otra, Sr/a. "),t(tenantName,true),t(", mayor de edad, con domicilio a estos efectos en "),t(tenantAddress,true),t(", provista de DNI número "),t(tenantDni,true),t(".")]);
+  para([t("Después de reconocerse mutua y recíprocamente la legal y precisa capacidad legal para obligar y obligarse cuanto en derecho fuera menester, haciéndolo libre y voluntariamente,")]);
 
-  // ── MANIFIESTAN ──
-  heading("M A N I F I E S T A N:");
-  addPara([
-    {text:"I.- Que Joana Solé Santacana por sus justos y legítimos títulos resulta ser titular del trastero número "},{text:unit,bold:true},
-    {text:" situado en la "},{text:building||"Nave Industrial",bold:true},
-    {text:" sita en C/ Pou, 61 Calafell (Tarragona)."}
-  ]);
-  addPara([{text:"II.- Que la arrendataria está interesada en el arrendamiento de dicho Trastero para almacenar en el mismo existencias y/o utensilios propios de su objeto social."}]);
-  addPara([{text:"Que en virtud de lo referido, acuerdan formalizar el presente contrato por el que pactan las siguientes,"}]);
-  space();
+  // ─── MANIFIESTAN ────────────────────────────────────────
+  seccion("M A N I F I E S T A N:");
+  para([t("I.- Que Joana Solé Santacana por sus justos y legítimos títulos resulta ser titular del trastero número "),t(unit,true),t(" situado en la Nave Industrial "),t(building||"",true),t(" sita en C/ Pou, 61 Calafell (Tarragona).")]);
+  para([t("II.- Que, la arrendataria está interesada en el arrendamiento de dicho Trastero para almacenar en el mismo existencias y/o utensilios propios de su objeto social.")]);
+  para([t("Que, en virtud de lo referido, acuerdan formalizar el presente contrato por el que pactan las siguientes,")]);
 
-  // ── CLÁUSULAS ──
-  heading("C L Á U S U L A S:");
-  heading("PRIMERA.-");
-  addPara([
-    {text:"Joana Solé Santacana, en adelante, arrendadora, cede en arrendamiento a "},{text:tenantName,bold:true},
-    {text:", en adelante, la arrendataria, quien acepta, "EL TRASTERO", sito en la calle Pou núm. 61 de Calafell, (Trastero núm. "},{text:unit,bold:true},
-    {text:" "},{text:building||"",bold:true},{text:"), cuya ubicación, lindes, características, estado de conservación, elementos y servicios comunes y privativos, manifiestan las partes conocer."}
-  ]);
+  // ─── CLÁUSULAS ──────────────────────────────────────────
+  seccion("C L Á U S U L A S:");
 
-  heading("SEGUNDA.-");
-  // Dynamic duration clause
-  addPara([
-    {text:"Las partes convienen en establecer la duración de este contrato de "},{text:durationText.toUpperCase(),bold:true},
-    {text:", en las condiciones que en el presente se estipulan, con inicio el día "},{text:`${startDay} de ${startMonth} de ${startYear}`,bold:true},
-    {text:" y finalización el día "},{text:`${endDay} de ${endMonth} de ${endYear}`,bold:true},
-    {text:". Finalizado el plazo establecido la parte arrendataria deberá dejar libre y vacua la nave objeto de alquiler, sin necesidad de requerimiento ni notificación previa alguna; ello sin perjuicio de que las partes puedan formalizar nuevo contrato de alquiler o prórroga expresa del presente."}
-  ]);
-  addPara([{text:"La parte arrendataria podrá renunciar libremente al contrato de alquiler, siempre que la renuncia se comunique de forma fehaciente por cualquier medio, con una antelación mínima de tres meses. El incumplimiento en el plazo de preaviso estipulado comportará el devengo de una indemnización equivalente al importe de la renta por el plazo transcurrido entre el día en que se efectúa el preaviso y los citados tres meses."}]);
+  clausula("PRIMERA.-");
+  para([t("Joana Solé Santacana, en adelante, arrendadora, cede en arrendamiento a "),t(tenantName,true),t(', en adelante, la arrendataria, quien acepta, "EL TRASTERO", sito en la calle Pou núm. 61 de Calafell, (Trastero núm. '),t(unit,true),t(" "),t(building||"",true),t("), cuya ubicación, lindes, características, estado de conservación, elementos y servicios comunes y privativos, manifiestan las partes conocer.")]);
 
-  heading("TERCERA.-");
-  addPara([{text:"Con expresa renuncia por los contratantes a lo establecido en el artículo 34 de la L.A.U., se acuerda que la extinción del contrato por el transcurso del término convenido no dará derecho a la arrendataria a indemnización alguna a cargo de la arrendadora."}]);
+  clausula("SEGUNDA.-");
+  para([t("Las partes convienen en establecer la duración de este contrato de "),t(durationText,true),t(", en las condiciones que en el presente se estipulan. Finalizado el plazo establecido de duración del contrato la parte arrendataria deberá dejar libre y vacua la nave objeto de alquiler, sin necesidad de que la misma efectúe requerimiento ni notificación previa alguna; ello sin perjuicio de que las partes puedan con carácter previo, formalizar nuevo contrato de alquiler o prórroga expresa del presente.")]);
+  para([t("La parte arrendataria podrá renunciar libremente al contrato de alquiler, siempre que la renuncia se comunique de forma fehaciente por cualquier medio, con una antelación mínima de tres meses. El incumplimiento en el plazo de preaviso estipulado comportará el devengo de una indemnización a favor de la arrendadora equivalente al importe de la renta de alquiler por el plazo transcurrido entre el día en que se efectúa el preaviso y los citados tres meses.")]);
+  para([t("Con independencia de lo anterior, la rescisión unilateral anticipada por parte de la sociedad arrendataria comportará la pérdida de la fianza estipulada en el pacto quinto.")]);
 
-  heading("CUARTA.-");
-  addPara([
-    {text:"Las partes establecen una renta de alquiler de "},{text:`${rent} €`,bold:true},
-    {text:" mensuales. La renta se abonará de forma anticipada durante los cinco primeros días de cada una de las mensualidades en la cuenta núm. "},
-    {text:"ES26 2100 0366 8502 0071 2257",bold:true},{text:", titular de la Sra. Joana Solé, o en la que la misma designe."}
-  ]);
-  addPara([{text:"La renta de alquiler será objeto de actualización anual según el Índice General de Precios al Consumo. La primera actualización se efectuará en "+signMonth+", conforme el IPC interanual al mes de diciembre. La renta no será objeto de modificación en el supuesto de que dicho índice resultare negativo."}]);
-  addPara([{text:"Adicionalmente, la parte arrendataria participará en los gastos de luz y agua de la nave en la cantidad de 2,5 € mensuales."}]);
+  clausula("TERCERA.-");
+  para([t("Con expresa renuncia por los contratantes a lo establecido en el artículo 34 de la L.A.U., se acuerda que la extinción del contrato por el transcurso del término convenido no dará derecho a la arrendataria a indemnización alguna a cargo de la arrendadora.")]);
 
-  heading("QUINTA.-");
-  addPara([{text:"No se establece ningún tipo de fianza."}]);
+  clausula("CUARTA.-");
+  para([t("Las partes establecen una renta de alquiler de "),t(rent+" €",true),t(" mensuales. La renta se abonará de forma anticipada durante los cinco primeros días de cada una de las mensualidades en la cuenta núm. "),t("ES26 2100 0366 8502 0071 2257",true),t(", titular de la Sra. Joana Solé, de la parte arrendadora, o en la que la misma designe. Sin perjuicio de ello, de desear la arrendadora domiciliar los recibos, la parte arrendataria firmará la correspondiente autorización para el adeudo domiciliado B2B.")]);
+  para([t("La renta de alquiler será objeto de actualización anual según el Índice General de Precios al Consumo. La primera actualización se efectuará en "),t(signMonth,true),t(", conforme el IPC interanual al mes de diciembre, si bien podrá aplicarse provisionalmente el último índice publicado. La renta no será objeto de modificación en el supuesto de que dicho índice resultare negativo. La renta actualizada conforme se ha indicado, será exigible a partir del mes siguiente a aquel en que la parte arrendadora lo notifique a la arrendataria por escrito, expresando el porcentaje de alteración aplicado. En ningún caso la demora en aplicar la revisión supondrá renuncia o caducidad a la misma.")]);
+  para([t("Adicionalmente a la renta de alquiler pactada, y en tanto que no existen contadores de consumo individualizados, la parte arrendataria participará en los gastos de luz y agua de la nave en la que se encuentra el trastero objeto de arrendamiento, en la cantidad de "),t("2,5€",true),t(" mensuales.")]);
 
-  heading("SEXTA.-");
-  addPara([{text:"Si finalizado el término del presente contrato la parte arrendataria no deja libre el trastero, indemnizará a la arrendadora en la cantidad de 10,00 € diarios; si el retraso fuere de dos meses o superior, la indemnización se fijará en 20,00 € diarios."}]);
+  clausula("QUINTA.-");
+  para([t("No se establece ningún tipo de fianza.")]);
 
-  heading("SÉPTIMA.-");
-  addPara([{text:"Serán a cuenta de la arrendataria todo tipo de impuestos, gravámenes y demás cargas fiscales, laborales, etc., que resultaren necesarios para la gestión y uso del trastero que se arrienda."}]);
+  clausula("SEXTA.-");
+  para([t("Si finalizado el término de duración del presente contrato, o finado el mismo por cualquier causa, la parte arrendataria no deja libre el trastero a disposición de la propiedad, indemnizará a la arrendadora en la cantidad de "),t("10,00 €",true),t(" diarios; si el retraso en el desalojo fuere de dos meses o superior, la indemnización se fijará en "),t("20,00 €",true),t(" diarios. Dicha cantidad se considerará de carácter indemnizatorio y se adicionará a la renta del periodo de permanencia. Sin perjuicio de la posible reclamación por otros conceptos estipulados en el presente contrato y de mayor cuantía por daños y perjuicios derivados de la falta de desalojo, si fueren los mismos de superior cuantía.")]);
+  para([t("Al finalizar el contrato por cualquier causa, incluida la renuncia unilateral, la parte arrendataria deberá dejar el trastero libre y vacuo de elementos de su propiedad, a disposición de la parte arrendadora, entendiéndose que, de no hacerlo, se considerarán cedidos de forma gratuita a favor de la ahora arrendadora, quien por tanto podrá hacer uso libre de los mismos, incluso destruirlos.")]);
 
-  heading("OCTAVA.-");
-  addPara([{text:"La arrendataria se hace directa y exclusivamente responsable de los daños que puedan ocasionarse a personas o cosas en el trastero arrendado. Se compromete a contratar un Seguro que cubra los riesgos básicos, daños materiales, robo y responsabilidad civil."}]);
+  clausula("SÉPTIMA.-");
+  para([t("Serán a cuenta de la arrendataria todo tipo de impuestos, gravámenes y demás cargas fiscales, laborales, etc., que resultaren necesarios para la gestión y uso del trastero que se arrienda.")]);
+  para([t("De resultar preciso, será por cuenta y cargo de la arrendataria los trámites y tasas que devenguen por la legalización del trastero-almacén, licencias y demás autorizaciones administrativas, quedando indemne la propiedad de la total tramitación del expediente. A estos efectos se deja constancia de que en la fijación del precio pactado se ha tenido en cuenta el actual estado del inmueble.")]);
 
-  heading("NOVENA.-");
-  addPara([{text:"Será de cuenta y cargo de la parte arrendadora el IBI y tasa de recogida de basuras."}]);
+  clausula("OCTAVA.-");
+  para([t("La arrendataria se hace directa y exclusivamente responsable, eximiendo de cualquier responsabilidad a la propiedad, de los daños que puedan ocasionarse a personas o cosas en el trastero arrendado, o que sean consecuencia de la actividad realizada en el mismo. Se compromete a contratar un Seguro que cubra durante la vigencia del contrato los riesgos básicos, daños materiales en contenido, robo y expoliación del contenido y responsabilidad civil.")]);
 
-  heading("DÉCIMA.-");
-  addPara([{text:"Con expresa renuncia al art. 32 de la L.A.U., la arrendataria no podrá subarrendar, ni ceder, el local objeto del presente contrato, ni total, ni parcialmente, sin el consentimiento previo y por escrito de la arrendadora."}]);
+  clausula("NOVENA.-");
+  para([t("Será de cuenta y cargo de la parte arrendadora el IBI y tasa de recogida de basuras; respecto a los suministros, de no proceder la parte arrendataria a efectuar y contratar instalación individualizada de los mismos, se estará a lo convenido en el pacto cuarto de este contrato.")]);
 
-  heading("UNDÉCIMA.-");
-  addPara([{text:"El trastero se arrienda en las condiciones en las que actualmente se encuentra. La parte arrendataria no podrá efectuar obra alguna sin el consentimiento expreso escrito de la parte arrendadora."}]);
+  clausula("DÉCIMA.-");
+  para([t("Con expresa renuncia al art. 32 de la L.A.U., la arrendataria no podrá subarrendar, ni ceder, el local objeto del presente contrato, ni total, ni parcialmente, si no es con el consentimiento previo y por escrito de la arrendadora. Se considerará cesión no consentida cualquier transmisión de títulos que comporte la pérdida de titularidad real por parte de la arrendataria, ello salvo autorización expresa de la parte arrendadora.")]);
 
-  heading("DUODÉCIMA.-");
-  addPara([{text:"La arrendataria se compromete a conservar y cuidar el objeto arrendado con la diligencia de un ordenado comerciante, debiendo realizar por su cuenta y cargo las obras necesarias de conservación y reparación."}]);
+  clausula("DÉCIMO-PRIMERA.-");
+  para([t("El trastero se arrienda en las condiciones en las que actualmente se encuentra y de las que resulta plenamente conocedora la parte arrendataria.")]);
+  para([t("La parte arrendataria no podrá efectuar obra alguna sin el consentimiento expreso escrito de la parte arrendadora, salvo aquellas propias del mantenimiento y reparación de las instalaciones o las que fueren exigidas por las autoridades para el desarrollo de la actividad, cuyo coste será, en todo caso, a cargo de la parte arrendataria.")]);
+  para([t("En el supuesto de que la parte arrendataria fuera requerida por administración pública a efectuar obras de adaptación del trastero, las mismas se llevarían a cabo de conformidad con la legislación vigente, siendo requisito la presentación del proyecto a la arrendadora a fin de que la misma autorice los aspectos de carácter estético inherentes a la obra.")]);
+  para([t("Resultaría asimismo necesaria la contratación de seguro a cargo de la arrendataria que cubriera cualquier riesgo inherente a las mismas. Finalizado el contrato por cualquier motivo, cualquier obra efectuada por la arrendataria en el local quedará en beneficio de la arrendadora de forma gratuita.")]);
 
-  heading("DECIMOTERCERA.-");
-  addPara([{text:"La arrendataria se obliga a permitir el acceso al trastero arrendado a la arrendadora o a la persona u operarios que esta delegue."}]);
+  clausula("DÉCIMO-SEGUNDA.-");
+  para([t("La arrendataria, por su propio interés, se compromete a conservar y cuidar el objeto arrendado con la diligencia de un ordenado comerciante, debiendo realizar por su cuenta y cargo las obras necesarias de conservación, reparación y reposición de todos los elementos arrendados, a fin de que se encuentren, al finalizar el presente contrato, en el mismo estado en que actualmente se hallan. Renuncia a los efectos indicados al art. 21 en relación con el 30 de la L.A.U.")]);
 
-  heading("DECIMOCUARTA.-");
-  addPara([{text:"El trastero arrendado no puede, bajo ningún concepto, ser destinado a vivienda propia o de terceras personas, ni a ningún otro uso que el especificado anteriormente."}]);
+  clausula("DÉCIMO-TERCERA.-");
+  para([t("La arrendataria se obliga a permitir el acceso al trastero arrendado a la arrendadora o a la persona u operarios que esta delegue, durante la vigencia del presente.")]);
 
-  heading("DECIMOQUINTA.-");
-  addPara([{text:"Queda expresamente prohibido el almacenaje de materias peligrosas o insalubres, así como realizar actividades ilegales. Ello será causa de rescisión automática del presente contrato."}]);
+  clausula("DÉCIMO-CUARTA.-");
+  para([t("El trastero arrendado no puede, bajo ningún concepto, ser destinado a vivienda propia o de terceras personas, sean o no familiares o dependientes de la arrendataria, ya sea parcial o totalmente, ni a ningún otro uso que el especificado anteriormente, salvo autorización expresa por escrito de los propietarios.")]);
 
-  heading("DECIMOSEXTA.-");
-  addPara([{text:"La arrendataria renuncia de forma expresa a la aplicación del art. 25, en relación al art. 31 de la L.A.U., renunciando a sus derechos a adquisición preferente, tanteo y retracto."}]);
+  clausula("DÉCIMO-QUINTA.-");
+  para([t("Queda expresamente prohibido el almacenaje en el trastero de materias peligrosas o insalubres, así como realizar actividades ilegales, incluso el almacenaje de productos ilícitos, sea por resultar su tenencia prohibida, o su origen; todo ello será causa de rescisión automática del presente contrato; bastando para ello la apertura de juicio oral, o el procesamiento por cualquier autoridad judicial, ya sea contra la arrendataria, su administrador y/o contra la avaladora.")]);
 
-  heading("DECIMOSÉPTIMA.-");
-  addPara([{text:"Para cualquier clase de duda respecto a la interpretación o cumplimiento del presente contrato, ambas partes se someten expresamente a la jurisdicción y competencia de los Juzgados y Tribunales de El Vendrell."}]);
+  clausula("DÉCIMO-SEXTA.-");
+  para([t("La arrendataria renuncia de forma expresa a la aplicación del art. 25, en relación al art. 31 de la L.A.U., renunciando a sus derechos a adquisición preferente, tanteo y retracto sobre el local arrendado.")]);
 
-  space(4);
-  addPara([{text:"Y en prueba de conformidad, las partes afirmándose y ratificándose en el contenido de este contrato, lo firman por duplicado, con promesa de cumplirlo bien y fielmente, en el lugar y fecha indicados en el encabezamiento."}]);
+  clausula("DÉCIMO-SÉPTIMA.-");
+  para([t("La arrendataria responde, conjunta y solidariamente, con renuncia al derecho de excusión, división y orden; respecto de todos y cada uno de los compromisos asumidos en el presente contrato y en especial del pago de la renta de alquiler.")]);
 
-  // ── SIGNATURES ──
-  checkPage(50);
-  space(6);
+  clausula("DÉCIMO-OCTAVA.-");
+  para([t("Para cualquier clase de duda respecto a la interpretación o cumplimiento del presente contrato, ambas partes, con renuncia expresa al fuero de su domicilio o cualquier otro si lo tuvieran, se someten expresamente a la jurisdicción y competencia de los Juzgados y Tribunales de El Vendrell.")]);
+
+  sp(4);
+  para([t("Y en prueba de conformidad, las partes afirmándose y ratificándose en el contenido de este contrato, lo firman por duplicado, con promesa de cumplirlo bien y fielmente, en el lugar y fecha indicados en el encabezamiento.")]);
+
+  // ─── FIRMAS ─────────────────────────────────────────────
+  checkPage(55); sp(8);
   d.setFont("helvetica","bold"); d.setFontSize(10);
   d.text("EL ARRENDADOR",lm,y);
   d.text("LA ARRENDATARIA",115,y);
-  y+=6;
+  y+=7;
   d.setFont("helvetica","normal"); d.setFontSize(9);
   d.text("Fdo.: Joana Solé Santacana",lm,y);
   d.text("Fdo.: "+tenantName,115,y);
-  y+=4;
+  y+=5;
 
-  // Owner signature
-  if(ownerSignature){
-    try{ d.addImage(ownerSignature,"PNG",lm,y,60,18); }catch(e){}
-  } else {
-    d.text("_______________________",lm,y+14);
-  }
-  // Tenant signature
-  if(tenantSignature){
-    try{ d.addImage(tenantSignature,"PNG",115,y,60,18); }catch(e){}
-  } else {
-    d.text("_______________________",115,y+14);
-  }
+  if(ownerSignature){ try{ d.addImage(ownerSignature,"PNG",lm,y,65,22); }catch(e){} }
+  else { d.setDrawColor(150); d.line(lm,y+20,lm+65,y+20); }
 
-  const filename=`Contrato_${(unit||"").replace(/ /g,"_")}_${(tenantName||"").replace(/ /g,"_")}_${signYear}.pdf`;
-  d.save(filename);
-  return filename;
+  if(tenantSignature){ try{ d.addImage(tenantSignature,"PNG",115,y,65,22); }catch(e){} }
+  else { d.setDrawColor(150); d.line(115,y+20,180,y+20); }
+
+  const fn="Contrato_"+((unit||"").replace(/ /g,"_"))+"_"+((tenantName||"").replace(/ /g,"_"))+"_"+signYear+".pdf";
+  d.save(fn);
+  return fn;
 }
 
 
