@@ -214,8 +214,12 @@ function generateContractDocx(data) {
   d.text("EL ARRENDATARIO",115,y);
   y+=20;
   d.setFont("helvetica","normal");
-  d.text("Firma: _______________________",lm,y);
-  d.text("Firma: _______________________",115,y);
+  d.text("Firma arrendador: _______________________",lm,y);
+  if(data.signatureData){
+    try{d.addImage(data.signatureData,"PNG",105,y-12,80,20);}catch(e){}
+  } else {
+    d.text("Firma arrendatario: _______________________",105,y);
+  }
   y+=8;
   d.setFont("helvetica","bolditalic");
   d.text("Berta Suau",lm,y);
@@ -2415,6 +2419,84 @@ function UploadContractModal({t,onClose,onSave,prefill}){
   );
 }
 
+function SignaturePad({name,onSign}){
+  const canvasRef=useRef(null);
+  const drawing=useRef(false);
+  const [hasSignature,setHasSignature]=useState(false);
+
+  const getPos=(e,canvas)=>{
+    const rect=canvas.getBoundingClientRect();
+    const scaleX=canvas.width/rect.width;
+    const scaleY=canvas.height/rect.height;
+    const src=e.touches?e.touches[0]:e;
+    return{x:(src.clientX-rect.left)*scaleX,y:(src.clientY-rect.top)*scaleY};
+  };
+
+  const startDraw=(e)=>{
+    e.preventDefault();
+    const canvas=canvasRef.current;
+    const ctx=canvas.getContext("2d");
+    const pos=getPos(e,canvas);
+    ctx.beginPath();
+    ctx.moveTo(pos.x,pos.y);
+    drawing.current=true;
+  };
+
+  const draw=(e)=>{
+    e.preventDefault();
+    if(!drawing.current)return;
+    const canvas=canvasRef.current;
+    const ctx=canvas.getContext("2d");
+    ctx.lineWidth=2.5;
+    ctx.lineCap="round";
+    ctx.lineJoin="round";
+    ctx.strokeStyle="#1A1612";
+    const pos=getPos(e,canvas);
+    ctx.lineTo(pos.x,pos.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pos.x,pos.y);
+  };
+
+  const endDraw=(e)=>{
+    e.preventDefault();
+    if(!drawing.current)return;
+    drawing.current=false;
+    const canvas=canvasRef.current;
+    const dataUrl=canvas.toDataURL("image/png");
+    setHasSignature(true);
+    onSign(dataUrl);
+  };
+
+  const clear=()=>{
+    const canvas=canvasRef.current;
+    const ctx=canvas.getContext("2d");
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    setHasSignature(false);
+    onSign(null);
+  };
+
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+        <div style={{fontSize:13,fontWeight:600}}>✍️ Firma de {name}</div>
+        {hasSignature&&<button className="btn btn-o btn-sm" onClick={clear}>🗑️ Borrar</button>}
+      </div>
+      <div style={{border:"2px solid var(--border)",borderRadius:12,overflow:"hidden",background:"white",touchAction:"none"}}>
+        <canvas
+          ref={canvasRef}
+          width={520} height={160}
+          style={{width:"100%",height:160,display:"block",cursor:"crosshair"}}
+          onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
+          onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+        />
+      </div>
+      {!hasSignature&&<p style={{fontSize:11,color:"var(--warm)",marginTop:4,textAlign:"center"}}>Firma con el dedo o Apple Pencil</p>}
+      {hasSignature&&<p style={{fontSize:11,color:"#4A9B6F",marginTop:4,textAlign:"center",fontWeight:600}}>✅ Firma registrada</p>}
+    </div>
+  );
+}
+
 function NewContractModal({t,onClose,onSave}){
   const now=new Date();
   const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
@@ -2497,27 +2579,16 @@ function NewContractModal({t,onClose,onSave}){
       {step===2&&<>
         <div className="modal-hd"><h3>✍️ {t.tenantSignature}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
         {bar(2,3)}
-        <div style={{background:"var(--cream)",borderRadius:12,padding:16,marginBottom:16,fontSize:13,lineHeight:1.8,maxHeight:240,overflowY:"auto"}}>
+        <div style={{background:"var(--cream)",borderRadius:12,padding:16,marginBottom:16,fontSize:13,lineHeight:1.8,maxHeight:200,overflowY:"auto"}}>
           <p style={{fontWeight:700,textAlign:"center",marginBottom:10,fontSize:14}}>CONTRATO DE ARRENDAMIENTO — {form.unit.toUpperCase()}</p>
           <p>📍 Calafell, <strong>{form.signDay} de {form.signMonth} de {form.signYear}</strong></p>
           <p>👤 <strong>Arrendador:</strong> Joana Solé Santacana · DNI 39618190T</p>
           <p>👤 <strong>Arrendatario:</strong> {form.tenantName} · DNI {form.tenantDni}</p>
           <p>📅 <strong>Periodo:</strong> {form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</p>
           <p>💶 <strong>Renta:</strong> {form.rent} €/mes · IPC + 1,5% anual</p>
-          <p style={{fontSize:11,color:"var(--warm)",marginTop:6}}>Suministros a cargo del arrendatario. Prohibido subarrendar sin consentimiento escrito.</p>
         </div>
-        <div style={{background:tenantSigned?"#E6F4ED":"var(--cream)",border:`2px solid ${tenantSigned?"#4A9B6F":"var(--border)"}`,borderRadius:14,padding:16,marginBottom:16,cursor:"pointer",transition:"all .2s"}} onClick={()=>setTenantSigned(v=>!v)}>
-          <div style={{display:"flex",alignItems:"center",gap:12}}>
-            <div style={{width:26,height:26,borderRadius:7,border:`2px solid ${tenantSigned?"#4A9B6F":"var(--warm)"}`,background:tenantSigned?"#4A9B6F":"white",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:700,fontSize:16,flexShrink:0}}>
-              {tenantSigned?"✓":""}
-            </div>
-            <div>
-              <div style={{fontWeight:600,fontSize:13}}>✍️ {form.tenantName}</div>
-              <div style={{fontSize:12,color:"var(--warm)"}}>{t.tenantConfirm}</div>
-            </div>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:8}}>
+        <SignaturePad name={form.tenantName} onSign={(sig)=>{setTenantSigned(!!sig);set("signatureData",sig);}}/>
+        <div style={{display:"flex",gap:8,marginTop:12}}>
           <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
           <button className="btn btn-p" style={{flex:1}} onClick={handleSign} disabled={!tenantSigned||saving}>
             {saving?"⏳ Guardando...":"✅ Firmar y guardar"}
