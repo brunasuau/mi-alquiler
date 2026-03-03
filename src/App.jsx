@@ -192,13 +192,13 @@ function generateContractPDF(data) {
   seccion("M A N I F I E S T A N:");
   para([t("I.- Que Joana Solé Santacana por sus justos y legítimos títulos resulta ser titular del trastero número "),t(unit,true),t(" situado en la Nave Industrial "),t(building||"",true),t(" sita en C/ Pou, 61 Calafell (Tarragona).")]);
   para([t("II.- Que, la arrendataria está interesada en el arrendamiento de dicho Trastero para almacenar en el mismo existencias y/o utensilios propios de su objeto social.")]);
-  para([t("Que, en virtud de lo referido, acuerdan formalizar el presente contrato por el que pactan las siguientes,")]);
+  para([t("Que, en virtud de lo referido, acuerdan formalizar el presente contrato por el que pactan las siguientes,clausulas:")]);
 
   // ─── CLÁUSULAS ──────────────────────────────────────────
   seccion("C L Á U S U L A S:");
 
   clausula("PRIMERA.-");
-  para([t("Joana Solé Santacana, en adelante, arrendadora, cede en arrendamiento a "),t(tenantName,true),t(", en adelante, la arrendataria, quien acepta, EL TRASTERO, sito en la calle Pou núm. 61 de Calafell, (Trastero núm. "),t(unit,true),t(" "),t(building||"",true),t("), cuya ubicación, lindes, características, estado de conservación, elementos y servicios comunes y privativos, manifiestan las partes conocer.")]);
+  para([t("Joana Solé Santacana, en adelante, arrendadora, cede en arrendamiento a "),t(tenantName,true),t(", en adelante, la arrendataria, quien acepta, El trastero, sito en la calle Pou núm. 61 de Calafell, (Trastero núm. "),t(unit,true),t(" "),t(building||"",true),t("), cuya ubicación, lindes, características, estado de conservación, elementos y servicios comunes y privativos, manifiestan las partes conocer.")]);
 
   clausula("SEGUNDA.-");
   para([t("Las partes convienen en establecer la duración de este contrato de "),t(durationText,true),t(", en las condiciones que en el presente se estipulan. Finalizado el plazo establecido de duración del contrato la parte arrendataria deberá dejar libre y vacua la nave objeto de alquiler, sin necesidad de que la misma efectúe requerimiento ni notificación previa alguna; ello sin perjuicio de que las partes puedan con carácter previo, formalizar nuevo contrato de alquiler o prórroga expresa del presente.")]);
