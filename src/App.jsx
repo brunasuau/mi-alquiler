@@ -198,7 +198,7 @@ function generateContractPDF(data) {
   seccion("C L Á U S U L A S:");
 
   clausula("PRIMERA.-");
-  para([t("Joana Solé Santacana, en adelante, arrendadora, cede en arrendamiento a "),t(tenantName,true),t(", en adelante, la arrendataria, quien acepta, “EL TRASTERO”, sito en la calle Pou núm. 61 de Calafell, (Trastero núm. "),t(unit,true),t(" "),t(building||"",true),t("), cuya ubicación, lindes, características, estado de conservación, elementos y servicios comunes y privativos, manifiestan las partes conocer.")]);
+  para([t("Joana Solé Santacana, en adelante, arrendadora, cede en arrendamiento a "),t(tenantName,true),t(", en adelante, la arrendataria, quien acepta, "),t("'EL TRASTERO'",true),t(", sito en la calle Pou núm. 61 de Calafell, (Trastero núm. "),t(unit,true),t(" "),t(building||"",true),t("), cuya ubicación, lindes, características, estado de conservación, elementos y servicios comunes y privativos, manifiestan las partes conocer.")]);
 
   clausula("SEGUNDA.-");
   para([t("Las partes convienen en establecer la duración de este contrato de "),t(durationText,true),t(", en las condiciones que en el presente se estipulan. Finalizado el plazo establecido de duración del contrato la parte arrendataria deberá dejar libre y vacua la nave objeto de alquiler, sin necesidad de que la misma efectúe requerimiento ni notificación previa alguna; ello sin perjuicio de que las partes puedan con carácter previo, formalizar nuevo contrato de alquiler o prórroga expresa del presente.")]);
