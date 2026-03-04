@@ -9,7 +9,6 @@ import {
   doc, setDoc, getDoc, collection, query, where,
   onSnapshot, addDoc, orderBy, serverTimestamp, updateDoc
 } from "firebase/firestore";
-import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 
 const OWNER_EMAIL = "bertasuau@gmail.com";
@@ -57,178 +56,6 @@ function generateReceipt({ tenantName, unit, month, date }) {
   d.save(`Rebut_${tenantName.replace(/ /g,"_")}_${month.replace(/ /g,"_")}.pdf`);
 }
 
-function generateAnnualExcel(tenants, year) {
-  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-  const months=monthNames.map(m=>`${m} ${year}`);
-  const wb=XLSX.utils.book_new();
-
-  // ── SHEET 1: RESUMEN ANUAL ──
-  const resumen=[["RESUMEN ANUAL "+year,"","",""],["","","",""],
-    ["Mes","Ingresos (€)","Gastos (€)","Inversiones (€)","Profit (€)"]];
-  let totI=0,totG=0,totInv=0;
-  months.forEach(m=>{
-    const ing=tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((s,t)=>s+(t.rent||0),0);
-    const gas=tenants.reduce((s,t)=>s+(t.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
-    const inv=tenants.reduce((s,t)=>s+(t.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
-    totI+=ing;totG+=gas;totInv+=inv;
-    resumen.push([m,ing,gas,inv,ing-gas-inv]);
-  });
-  resumen.push(["","","","",""]);
-  resumen.push(["TOTAL",totI,totG,totInv,totI-totG-totInv]);
-  const ws1=XLSX.utils.aoa_to_sheet(resumen);
-  ws1["!cols"]=[{wch:20},{wch:15},{wch:15},{wch:16},{wch:12}];
-  XLSX.utils.book_append_sheet(wb,ws1,"Resumen");
-
-  // ── SHEET 2: PAGOS ──
-  const pagosData=[["PAGOS INQUILINOS "+year],["Inquilino","Piso","Alquiler/mes",...months]];
-  tenants.forEach(ten=>{
-    const row=[ten.name,ten.unit,ten.rent+"€"];
-    months.forEach(m=>{const p=(ten.payments||{})[m];row.push(p?.paid?"✓ "+p.date:"✗ Pendiente");});
-    pagosData.push(row);
-  });
-  const ws2=XLSX.utils.aoa_to_sheet(pagosData);
-  ws2["!cols"]=[{wch:20},{wch:15},{wch:14},...months.map(()=>({wch:14}))];
-  XLSX.utils.book_append_sheet(wb,ws2,"Pagos");
-
-  // ── SHEET 3: GASTOS E INVERSIONES ──
-  const gastosData=[["GASTOS E INVERSIONES "+year],["Inquilino","Concepto","Tipo","Mes","Importe (€)","Nota"]];
-  tenants.forEach(ten=>{
-    (ten.costs||[]).filter(c=>c.month?.includes(String(year))).forEach(c=>{
-      gastosData.push([ten.name,c.icon+" "+c.name,c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto",c.month,c.amount,c.nota||""]);
-    });
-  });
-  const ws3=XLSX.utils.aoa_to_sheet(gastosData);
-  ws3["!cols"]=[{wch:20},{wch:20},{wch:14},{wch:16},{wch:12},{wch:30}];
-  XLSX.utils.book_append_sheet(wb,ws3,"Gastos");
-
-  // ── SHEET 4: INQUILINOS ──
-  const tenantsData=[["INQUILINOS "+year],["Nombre","Piso","Teléfono","Email","Alquiler","Inicio contrato","Fin contrato"]];
-  tenants.forEach(ten=>{
-    tenantsData.push([ten.name,ten.unit,ten.phone||"",ten.email||"",ten.rent+"€",ten.contractStart||"",ten.contractEnd||""]);
-  });
-  const ws4=XLSX.utils.aoa_to_sheet(tenantsData);
-  ws4["!cols"]=[{wch:22},{wch:15},{wch:14},{wch:26},{wch:12},{wch:16},{wch:16}];
-  XLSX.utils.book_append_sheet(wb,ws4,"Inquilinos");
-
-  XLSX.writeFile(wb,`MiAlquiler_Resumen_${year}.xlsx`);
-  return {year, filename:`MiAlquiler_Resumen_${year}.xlsx`, date:new Date().toLocaleDateString("es-ES"), totI, totG, totInv, profit:totI-totG-totInv};
-}
-
-function generateContractDocx(data) {
-  const { unit, tenantName, tenantDni, tenantAddress, signDay, signMonth, signYear,
-          startDay, startMonth, startYear, endDay, endMonth, endYear, rent } = data;
-  const d = new jsPDF({ format:"a4", unit:"mm" });
-  const lm=20, rm=190, maxW=rm-lm;
-  let y=20;
-  const lh=6;
-
-  function addText(segments, lineW=maxW) {
-    // segments: [{text, bold}]
-    let x=lm;
-    // Build lines by wrapping words
-    let lines=[[]]; // array of segments per line
-    segments.forEach(seg=>{
-      const words=seg.text.split(" ");
-      words.forEach((word,wi)=>{
-        const w=word+(wi<words.length-1?" ":"");
-        d.setFont("helvetica", seg.bold?"bold":"normal");
-        const ww=d.getTextWidth(w);
-        const lineW2=d.getTextWidth(lines[lines.length-1].map(s=>s.text).join(""));
-        if(lineW2+ww>lineW && lines[lines.length-1].length>0){
-          lines.push([{text:w,bold:seg.bold}]);
-        } else {
-          const last=lines[lines.length-1];
-          if(last.length>0&&last[last.length-1].bold===seg.bold){
-            last[last.length-1].text+=w;
-          } else {
-            last.push({text:w,bold:seg.bold});
-          }
-        }
-      });
-    });
-    lines.forEach(line=>{
-      if(y>280){d.addPage();y=20;}
-      let cx=lm;
-      line.forEach(seg=>{
-        d.setFont("helvetica",seg.bold?"bold":"normal");
-        d.setFontSize(10);
-        d.text(seg.text,cx,y);
-        cx+=d.getTextWidth(seg.text);
-      });
-      y+=lh;
-    });
-    y+=2;
-  }
-
-  function title(text){
-    if(y>270){d.addPage();y=20;}
-    d.setFont("helvetica","bold"); d.setFontSize(13);
-    d.text(text, 105, y, {align:"center"}); y+=8;
-    d.setFontSize(10);
-  }
-  function heading(text){
-    if(y>270){d.addPage();y=20;}
-    d.setFont("helvetica","bold"); d.setFontSize(10);
-    d.text(text,lm,y); y+=lh+1;
-  }
-  function space(){y+=3;}
-
-  title(`CONTRATO DE ARRENDAMIENTO DE ${unit.toUpperCase()}`);
-  space();
-  addText([{text:`En Calafell, a ${signDay} de ${signMonth} de ${signYear}.`}]);
-  space();
-  heading("REUNIDOS");
-  addText([{text:"De una parte, D./Dña. "},{text:"JOANA SOLÉ SANTACANA",bold:true},{text:", mayor de edad, con DNI nº "},{text:"39618190T",bold:true},{text:", domicilio en "},{text:"PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª",bold:true},{text:", en adelante "},{text:"EL ARRENDADOR",bold:true},{text:"."}]);
-  addText([{text:"Y de otra parte, D./Dña. "},{text:tenantName,bold:true},{text:", DNI nº "},{text:tenantDni,bold:true},{text:", domicilio en "},{text:tenantAddress,bold:true},{text:", en adelante "},{text:"EL ARRENDATARIO",bold:true},{text:"."}]);
-  addText([{text:"Ambas partes se reconocen capacidad legal suficiente para formalizar el presente contrato."}]);
-  space();
-  heading("EXPONEN");
-  addText([{text:"1. El ARRENDADOR es propietario del local en "},{text:"Carrer Montserrat, nº 14, Calafell (Tarragona)",bold:true},{text:"."}]);
-  addText([{text:"2. Ambas partes desean renovar el arrendamiento bajo las siguientes condiciones."}]);
-  space();
-  heading("CLÁUSULAS");
-  heading("Primera. Objeto");
-  addText([{text:"El ARRENDADOR renueva el arrendamiento sobre el local en "},{text:"Carrer Montserrat, nº 14, Calafell",bold:true},{text:", uso comercial."}]);
-  heading("Segunda. Duración");
-  addText([{text:"Duración dos (2) años: del "},{text:`${startDay} de ${startMonth} de ${startYear}`,bold:true},{text:" al "},{text:`${endDay} de ${endMonth} de ${endYear}`,bold:true},{text:"."}]);
-  heading("Tercera. Renta");
-  addText([{text:"Renta mensual: "},{text:`${rent} €`,bold:true},{text:", abonada los cinco primeros días del mes por transferencia bancaria."}]);
-  heading("Cuarta. Actualización de la renta");
-  addText([{text:"Actualización anual según IPC + 1,5% adicional. Primera actualización a los 12 meses de la firma."}]);
-  heading("Quinta. Gastos y suministros");
-  addText([{text:"Electricidad, agua y basuras son a cargo exclusivo del ARRENDATARIO."}]);
-  heading("Sexta. Fianza");
-  addText([{text:"Al ser renovación, no se constituye fianza adicional."}]);
-  heading("Séptima. Conservación");
-  addText([{text:"El ARRENDATARIO mantendrá el local en perfecto estado. Reparaciones menores a su cargo."}]);
-  heading("Octava. Cesión y subarriendo");
-  addText([{text:"Prohibida la cesión y el subarriendo sin consentimiento escrito del ARRENDADOR."}]);
-  heading("Novena. Legislación");
-  addText([{text:"Se rige por el Código Civil y la Ley de Arrendamientos Urbanos vigente."}]);
-  space();
-  addText([{text:"Y en prueba de conformidad, firman el presente contrato por duplicado en el lugar y fecha indicados."}]);
-  y+=10;
-  if(y>250){d.addPage();y=20;}
-  d.setFont("helvetica","bold"); d.setFontSize(10);
-  d.text("EL ARRENDADOR",lm,y);
-  d.text("EL ARRENDATARIO",115,y);
-  y+=20;
-  d.setFont("helvetica","normal");
-  d.text("Firma arrendador: _______________________",lm,y);
-  if(data.signatureData){
-    try{d.addImage(data.signatureData,"PNG",105,y-12,80,20);}catch(e){}
-  } else {
-    d.text("Firma arrendatario: _______________________",105,y);
-  }
-  y+=8;
-  d.setFont("helvetica","bolditalic");
-  d.text("Berta Suau",lm,y);
-  d.text(tenantName,115,y);
-  const filename=`Contrato_${unit.replace(/ /g,"_")}_${tenantName.replace(/ /g,"_")}_${signYear}.pdf`;
-  d.save(filename);
-  return filename;
-}
-
 function checkIPC(tenants) {
   const now=new Date(); const alerts=[];
   tenants.forEach(ten=>{
@@ -267,10 +94,6 @@ const T={
     joinedSince:"Inquilino desde",totalCosts:"Total costes",monthlyRent:"Alquiler fijo",
     incomeMonth:"Ingreso mensual",paidCount:"Pagos recibidos",activeTenants:"Inquilinos activos",
     pendingMaint:"Mantenimiento pendiente",recentIncidents:"Incidencias recientes",hello:"Hola",
-    documents:"Documentos",generateExcel:"Generar Excel anual",downloadDoc:"Descargar",noDocuments:"No hay documentos todavía",docGenerated:"Documento generado",
-    contracts:"Contratos",newContract:"Nuevo contrato",contractGenerated:"Contrato generado",noContracts:"No hay contratos",tenantCreated:"Inquilino y contrato creados",
-    tenantSignature:"Firma del inquilino",tenantConfirm:"He leído y acepto el contrato de arrendamiento",contractDetails:"Datos del contrato",
-    signDate:"Fecha de firma",startDate:"Inicio del contrato",endDate:"Fin del contrato",dni:"DNI",address:"Domicilio actual",accessPassword:"Contraseña de acceso",
     contractStart:"Inicio contrato",contractEnd:"Fin contrato",editTenant:"Editar inquilino",
     contractAnniversary:"Subida de IPC",notifications:"Notificaciones",
     noNotifications:"Sin notificaciones",contractSigned:"Contrato firmado el",
@@ -293,10 +116,6 @@ const T={
     joinedSince:"Tenant since",totalCosts:"Total costs",monthlyRent:"Fixed rent",
     incomeMonth:"Monthly income",paidCount:"Payments received",activeTenants:"Active tenants",
     pendingMaint:"Pending maintenance",recentIncidents:"Recent issues",hello:"Hello",
-    documents:"Documents",generateExcel:"Generate annual Excel",downloadDoc:"Download",noDocuments:"No documents yet",docGenerated:"Document generated",
-    contracts:"Contracts",newContract:"New contract",contractGenerated:"Contract generated",noContracts:"No contracts yet",tenantCreated:"Tenant and contract created",
-    tenantSignature:"Tenant signature",tenantConfirm:"I have read and accept the rental agreement",contractDetails:"Contract details",
-    signDate:"Signing date",startDate:"Contract start",endDate:"Contract end",dni:"ID number",address:"Current address",accessPassword:"Access password",
     contractStart:"Contract start",contractEnd:"Contract end",editTenant:"Edit tenant",
     contractAnniversary:"IPC Rent Increase",notifications:"Notifications",
     noNotifications:"No notifications",contractSigned:"Contract signed on",
@@ -319,10 +138,6 @@ const T={
     joinedSince:"مستأجر منذ",totalCosts:"إجمالي التكاليف",monthlyRent:"الإيجار الثابت",
     incomeMonth:"الدخل الشهري",paidCount:"المدفوعات المستلمة",activeTenants:"المستأجرون النشطون",
     pendingMaint:"صيانة معلقة",recentIncidents:"البلاغات الأخيرة",hello:"مرحباً",
-    documents:"المستندات",generateExcel:"إنشاء Excel سنوي",downloadDoc:"تحميل",noDocuments:"لا توجد مستندات",docGenerated:"تم إنشاء المستند",
-    contracts:"العقود",newContract:"عقد جديد",contractGenerated:"تم إنشاء العقد",noContracts:"لا توجد عقود",tenantCreated:"تم إنشاء المستأجر والعقد",
-    tenantSignature:"توقيع المستأجر",tenantConfirm:"لقد قرأت وأوافق على عقد الإيجار",contractDetails:"بيانات العقد",
-    signDate:"تاريخ التوقيع",startDate:"بداية العقد",endDate:"نهاية العقد",dni:"رقم الهوية",address:"العنوان الحالي",accessPassword:"كلمة المرور",
     contractStart:"بداية العقد",contractEnd:"نهاية العقد",editTenant:"تعديل المستأجر",
     contractAnniversary:"زيادة IPC",notifications:"الإشعارات",
     noNotifications:"لا توجد إشعارات",contractSigned:"تم توقيع العقد في",
@@ -531,16 +346,10 @@ export default function App() {
   const [tenants,setTenants]=useState([]);
   const [showNotif,setShowNotif]=useState(false);
   const [sidebarOpen,setSidebarOpen]=useState(true);
-  const [documents,setDocuments]=useState([]);
-  const [contracts,setContracts]=useState([]);
-  const [properties,setProperties]=useState([]);
-  const [currentProp,setCurrentProp]=useState(null); // {id, name, buildings:[]}
-  const [units,setUnits]=useState([]); // [{id, name, building, propId}]
 
   const t=T[lang||"es"];
   const isOwner=profile?.role==="owner";
   const anniversaries=isOwner?checkIPC(tenants):[];
-  const freeUnits=isOwner?units.filter(u=>(!currentProp||u.propId===currentProp.id)&&!tenants.find(t=>t.unit===u.name&&t.building===u.building)):[];
 
   useEffect(()=>{
     const unsub=onAuthStateChanged(auth,async(u)=>{
@@ -552,110 +361,11 @@ export default function App() {
   },[]);
 
   useEffect(()=>{
-    if(!user||!isOwner)return;
-    return onSnapshot(collection(db,"properties",user.uid,"list"),snap=>{
-      const props=snap.docs.map(d=>({id:d.id,...d.data()}));
-      setProperties(props);
-      if(props.length===1)setCurrentProp(props[0]);
-      // First time: create default Calafell property
-      if(props.length===0){
-        addDoc(collection(db,"properties",user.uid,"list"),{
-          name:"Calafell",
-          buildings:["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C","C/ Montserrat 14","C/ Barceloneta 3","C/ Torredembarra 13","Monjos"],
-          createdAt:serverTimestamp()
-        });
-      }
-    });
-  },[user,isOwner]);
-
-  useEffect(()=>{
-    if(!user||!isOwner)return;
-    return onSnapshot(collection(db,"units",user.uid,"list"),snap=>{
-      setUnits(snap.docs.map(d=>({id:d.id,...d.data()})));
-    });
-  },[user,isOwner]);
-
-  async function saveUnit(unit){
-    await addDoc(collection(db,"units",user.uid,"list"),{...unit,createdAt:serverTimestamp()});
-  }
-  async function deleteUnit(id){
-    const {deleteDoc}=await import("firebase/firestore");
-    await deleteDoc(doc(db,"units",user.uid,"list",id));
-    showToast("🗑️ Unidad eliminada");
-  }
-
-  useEffect(()=>{
     if(!isOwner)return;
     const q=query(collection(db,"users"),where("role","==","tenant"));
-    const unsub=onSnapshot(q,snap=>{
-      const all=snap.docs.map(d=>({id:d.id,...d.data()}));
-      // Filter by current property if set
-      setTenants(currentProp?all.filter(t=>t.propId===currentProp.id):all);
-    });
+    const unsub=onSnapshot(q,snap=>setTenants(snap.docs.map(d=>({id:d.id,...d.data()}))));
     return unsub;
-  },[isOwner,currentProp]);
-
-  useEffect(()=>{
-    if(!isOwner||!user)return;
-    const q=query(collection(db,"documents",user.uid,"files"),orderBy("createdAt","desc"));
-    const unsub=onSnapshot(q,snap=>setDocuments(snap.docs.map(d=>({id:d.id,...d.data()}))));
-    return unsub;
-  },[isOwner,user]);
-
-  async function saveDocument(docInfo){
-    await addDoc(collection(db,"documents",user.uid,"files"),{...docInfo,createdAt:serverTimestamp()});
-  }
-
-  useEffect(()=>{
-    if(!isOwner||!user)return;
-    const q=query(collection(db,"contracts",user.uid,"files"),orderBy("createdAt","desc"));
-    const unsub=onSnapshot(q,snap=>setContracts(snap.docs.map(d=>({id:d.id,...d.data()}))));
-    return unsub;
-  },[isOwner,user]);
-
-  // INVOICES
-  const [invoices,setInvoices]=useState([]);
-  useEffect(()=>{
-    if(!user||!isOwner)return;
-    return onSnapshot(collection(db,"invoices",user.uid,"files"),snap=>{
-      setInvoices(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>a.invoiceNum-b.invoiceNum));
-    });
-  },[user,isOwner]);
-  async function saveInvoice(inv){
-    await addDoc(collection(db,"invoices",user.uid,"files"),{...inv,propId:currentProp?.id||"",createdAt:serverTimestamp()});
-  }
-  async function deleteInvoice(id){
-    const {deleteDoc}=await import("firebase/firestore");
-    await deleteDoc(doc(db,"invoices",user.uid,"files",id));
-    showToast("🗑️ Factura eliminada");
-  }
-
-  // RECEIPTS
-  const [receipts,setReceipts]=useState([]);
-  useEffect(()=>{
-    if(!user||!isOwner)return;
-    return onSnapshot(collection(db,"receipts",user.uid,"files"),snap=>{
-      setReceipts(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));
-    });
-  },[user,isOwner]);
-  async function saveReceipt(rec){
-    await addDoc(collection(db,"receipts",user.uid,"files"),{...rec,propId:currentProp?.id||"",createdAt:serverTimestamp()});
-  }
-  async function deleteReceipt(id){
-    const {deleteDoc}=await import("firebase/firestore");
-    await deleteDoc(doc(db,"receipts",user.uid,"files",id));
-    showToast("🗑️ Recibo eliminado");
-  }
-
-  async function saveContract(contractInfo){
-    await addDoc(collection(db,"contracts",user.uid,"files"),{...contractInfo,createdAt:serverTimestamp()});
-  }
-
-  async function deleteContract(contractId){
-    const {deleteDoc} = await import("firebase/firestore");
-    await deleteDoc(doc(db,"contracts",user.uid,"files",contractId));
-    showToast("🗑️ Contrato eliminado");
-  }
+  },[isOwner]);
 
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
   const persist=async(ref,data)=>{setSaving(true);await updateDoc(ref,data);setSaving(false);};
@@ -663,22 +373,6 @@ export default function App() {
   if(user===undefined)return(<><style>{css}</style><div style={{minHeight:"100vh",background:"#1A1612",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:"#8C7B6E",fontFamily:"'DM Sans',sans-serif"}}>Cargando...</p></div></>);
   if(!lang&&!user)return(<><style>{css}</style><LangSelect onSelect={setLang}/></>);
   if(!user)return(<><style>{css}</style><LoginScreen t={t} onLogin={(u,p)=>{setUser(u);setProfile(p);setPage(p.role==="owner"?"dashboard":"t-home");}}/></>);
-  if(isOwner&&!currentProp)return(<><style>{css}</style><PropertySelector user={user} properties={properties} onSelect={setCurrentProp}
-    onCreateProp={async(name,buildings)=>{
-      await addDoc(collection(db,"properties",user.uid,"list"),{name,buildings,createdAt:serverTimestamp()});
-      showToast("✅ Propiedad '"+name+"' creada");
-    }}
-    onUpdateProp={async(id,name,buildings)=>{
-      const {updateDoc}=await import("firebase/firestore");
-      await updateDoc(doc(db,"properties",user.uid,"list",id),{name,buildings});
-      showToast("✅ Propiedad actualizada");
-    }}
-    onDeleteProp={async(id)=>{
-      const {deleteDoc}=await import("firebase/firestore");
-      await deleteDoc(doc(db,"properties",user.uid,"list",id));
-      showToast("🗑️ Propiedad eliminada");
-    }}
-  /></>);
 
   const ownerNav=[
     {id:"dashboard",icon:"📊",label:t.dashboard},
@@ -687,11 +381,6 @@ export default function App() {
     {id:"maintenance",icon:"🔧",label:t.maintenance},
     {id:"calendar",icon:"📅",label:t.calendar},
     {id:"messages",icon:"💬",label:t.messages},
-    {id:"documentos",icon:"📁",label:t.documents},
-    {id:"contratos",icon:"📝",label:t.contracts},
-    {id:"facturas",icon:"🧾",label:"Facturas"},
-    {id:"recibos",icon:"🖨️",label:"Recibos"},
-    {id:"trasteros",icon:"📦",label:"Trasteros"},
   ];
   const tenantNav=[
     {id:"t-home",icon:"🏠",label:t.myHome},
@@ -704,49 +393,10 @@ export default function App() {
   async function togglePayment(tenantId,month){
     const t2=tenants.find(x=>x.id===tenantId);if(!t2)return;
     const payments={...(t2.payments||{})};const cur=payments[month]||{paid:false};
-    const nowPaying=!cur.paid;
-    payments[month]={paid:nowPaying,date:nowPaying?today():null};
+    payments[month]={paid:!cur.paid,date:!cur.paid?today():null};
     await persist(doc(db,"users",tenantId),{payments});
-
-    if(nowPaying){
-      const now=new Date();
-      const year=now.getFullYear();
-      const dateStr=today();
-      const concept=`Alquiler ${t2.unit||""} ${month}`;
-
-      // Generate FACTURA if docType is factura or ambos
-      if(t2.docType==="factura"||t2.docType==="ambos"){
-        const allInvNums=invoices.filter(i=>i.year===year).map(i=>i.invoiceNum);
-        const nextNum=allInvNums.length>0?Math.max(...allInvNums)+1:7;
-        const base=parseFloat(t2.docType==="ambos"?t2.rentFactura:t2.rent)||0;
-        const inv={
-          invoiceNum:nextNum, year, date:dateStr, concept,
-          base, tenantId, tenantName:t2.name,
-          clientName:t2.name, clientNif:t2.dni||"",
-          clientAddress:t2.address||"", clientEmail:t2.email||""
-        };
-        await saveInvoice(inv);
-        generateInvoicePDF(inv);
-      }
-
-      // Generate RECIBO if docType is recibo or ambos
-      if(t2.docType==="recibo"||t2.docType==="ambos"||!t2.docType){
-        const allRecNums=receipts.filter(r=>r.year===year).map(r=>r.receiptNum);
-        const nextNum=allRecNums.length>0?Math.max(...allRecNums)+1:1;
-        const amount=parseFloat(t2.docType==="ambos"?t2.rentRecibo:t2.rent)||0;
-        const rec={
-          receiptNum:nextNum, year, date:dateStr, concept,
-          amount, tenantId, tenantName:t2.name,
-          clientName:t2.name, clientDni:t2.dni||""
-        };
-        await saveReceipt(rec);
-        generateReceiptPDF(rec);
-      }
-
-      showToast("✅ Pago registrado · Documento generado y guardado");
-    }else{
-      showToast("❌ Pago revertido");
-    }
+    if(payments[month].paid)generateReceipt({tenantName:t2.name,unit:t2.unit,month,date:today()});
+    showToast(payments[month].paid?"✅ Pago registrado · PDF descargado":"❌ Pago revertido");
   }
 
   async function changeStatus(tenantId,maintId,status){
@@ -763,45 +413,6 @@ export default function App() {
     showToast("✅ Incidencia enviada");
   }
 
-  async function renewContract(tenantId, months){
-    const ten=tenants.find(x=>x.id===tenantId);if(!ten)return;
-    const currentEnd=ten.contractEnd?new Date(ten.contractEnd):new Date();
-    const newEnd=new Date(currentEnd);
-    newEnd.setMonth(newEnd.getMonth()+parseInt(months));
-    const newEndStr=newEnd.toISOString().split("T")[0];
-    // Apply IPC if enabled (+1.5%)
-    let newRent=ten.rent;
-    let newRentRecibo=ten.rentRecibo;
-    let newRentFactura=ten.rentFactura;
-    if(ten.ipcEnabled==="si"){
-      newRent=Math.round(ten.rent*1.015*100)/100;
-      if(ten.rentRecibo)newRentRecibo=Math.round(ten.rentRecibo*1.015*100)/100;
-      if(ten.rentFactura)newRentFactura=Math.round(ten.rentFactura*1.015*100)/100;
-    }
-    await persist(doc(db,"users",tenantId),{
-      contractEnd:newEndStr,
-      contractStart:ten.contractEnd||ten.contractStart,
-      rent:newRent,
-      ...(ten.rentRecibo?{rentRecibo:newRentRecibo}:{}),
-      ...(ten.rentFactura?{rentFactura:newRentFactura}:{})
-    });
-    setModal(null);
-    showToast(`✅ Contrato renovado hasta ${newEndStr}${ten.ipcEnabled==="si"?" · IPC +1,5% aplicado":""}`);
-  }
-
-  async function updateTenantField(tenantId,field,value){
-    await persist(doc(db,"users",tenantId),{[field]:value});
-    showToast("✅ Actualizado");
-  }
-
-  async function deleteTenant(tenantId){
-    if(!window.confirm("¿Eliminar este inquilino? Se borrarán todos sus datos."))return;
-    const {deleteDoc}=await import("firebase/firestore");
-    await deleteDoc(doc(db,"users",tenantId));
-    setModal(null);
-    showToast("🗑️ Inquilino eliminado");
-  }
-
   async function addCost(tenantId,cost){
     const ten=tenants.find(x=>x.id===tenantId);
     const costs=[...(ten.costs||[]),{id:Date.now(),...cost}];
@@ -809,29 +420,16 @@ export default function App() {
     setModal(null);showToast("✅ Coste añadido");
   }
 
-  async function deleteCost(tenantId,costId){
-    const ten=tenants.find(x=>x.id===tenantId);
-    const costs=(ten.costs||[]).filter(c=>c.id!==costId);
-    await persist(doc(db,"users",tenantId),{costs});
-    showToast("🗑️ Coste eliminado");
-  }
-
-  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes,rentRecibo,rentFactura,ipcEnabled}){
+  async function createTenant({name,unit,phone,rent,email,password,contractStart,contractEnd}){
     try{
-      const tenantRef=doc(collection(db,"users"));
-      await setDoc(tenantRef,{
-        name,unit,phone:phone||"",rent:parseFloat(rent),email:email||"",role:"tenant",
-        joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
-        docType:docType||"recibo",building:building||"",propId:currentProp?.id||"",
-        payFreq:payFreq||"mensual",ipcEnabled:ipcEnabled||"si",
-        rentRecibo:docType==="ambos"?parseFloat(rentRecibo)||0:0,
-        rentFactura:docType==="ambos"?parseFloat(rentFactura)||0:0,
-        fianza:fianza||"no",fianzaAmount:fianza==="si"?parseFloat(fianzaAmount)||0:0,
-        notes:notes||"",
+      const cred=await createUserWithEmailAndPassword(auth,email,password);
+      await setDoc(doc(db,"users",cred.user.uid),{
+        name,unit,phone,rent:parseFloat(rent),email,role:"tenant",joined:today(),
+        contractStart:contractStart||"",contractEnd:contractEnd||"",
         payments:{},costs:[],maintenance:[],lang:"es"
       });
-      showToast("✅ Inquilino creado");
-      return tenantRef.id;
+      await signInWithEmailAndPassword(auth,OWNER_EMAIL,window._ownerPass||"");
+      setModal(null);showToast("✅ Inquilino creado");
     }catch(e){showToast("❌ Error: "+e.message);}
   }
 
@@ -843,16 +441,11 @@ export default function App() {
   const renderPage=()=>{
     if(isOwner){
       if(page==="dashboard")return<Dashboard t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})}/>;
-      if(page==="tenants")return<Tenants t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})} onDelete={id=>{if(confirm("¿Eliminar este inquilino? Se borrarán todos sus datos."))deleteTenant(id);}}/>;
-      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onDeleteCost={deleteCost}/>;
+      if(page==="tenants")return<Tenants t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
+      if(page==="finances")return<Finances t={t} tenants={tenants} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})}/>;
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
-      if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
-      if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
-      if(page==="trasteros")return<TrasterosPage tenants={tenants} units={units.filter(u=>!currentProp||u.propId===currentProp.id)} buildings={currentProp?.buildings||[]} propId={currentProp?.id||""} onSaveUnit={saveUnit} onDeleteUnit={deleteUnit} onAssignTenant={(unit)=>setModal({type:"assign-tenant",unit})}/>;
-      if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
-      if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -863,94 +456,10 @@ export default function App() {
 
   const renderModal=()=>{
     if(!modal)return null;
-    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})} contracts={contracts} onUploadContract={()=>setModal({type:"upload-contract-tenant",id:modal.id})} onDelete={()=>deleteTenant(modal.id)} onUpdateField={updateTenantField}/>;}
-    if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} buildings={currentProp?.buildings||[]} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
-    if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant} propBuildings={currentProp?.buildings||[]}/>;}
+    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})}/>;}
+    if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant}/>;
+    if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
-    if(modal.type==="assign-tenant"){
-      return<AssignTenantModal
-        unit={modal.unit}
-        buildings={currentProp?.buildings||[]}
-        onClose={()=>setModal(null)}
-        onSave={async(tenantData,contractData)=>{
-          const id=await createTenant({...tenantData,unit:modal.unit.name,building:modal.unit.building});
-          if(contractData&&id){
-            await saveContract({...contractData,tenantUid:id,date:today(),year:new Date().getFullYear()});
-          }
-          showToast("✅ Inquilino asignado"+(contractData?" · Contrato creado":""));
-          setModal(null);
-        }}
-      />;
-    }
-    if(modal.type==="manage-buildings"){
-      return<ManageBuildingsModal
-        prop={currentProp}
-        onClose={()=>setModal(null)}
-        onSave={async(buildings)=>{
-          const {updateDoc}=await import("firebase/firestore");
-          await updateDoc(doc(db,"properties",user.uid,"list",currentProp.id),{buildings});
-          setCurrentProp(p=>({...p,buildings}));
-          showToast("✅ Naves actualizadas");
-          setModal(null);
-        }}
-      />;
-    }
-    if(modal.type==="renew-contract"){
-      const ten=tenants.find(x=>x.id===modal.tenantId);
-      return<RenewContractModal tenant={ten} onClose={()=>setModal(null)} onRenew={(months)=>renewContract(modal.tenantId,months)}/>;
-    }
-    if(modal.type==="new-invoice"){
-      const ten=tenants.find(x=>x.id===modal.tenantId);
-      return<NewInvoiceModal t={t} tenant={ten} invoices={invoices} onClose={()=>setModal(null)} onSave={async(inv)=>{
-        await saveInvoice(inv);
-        showToast("✅ Factura guardada");
-      }}/>;
-    }
-    if(modal.type==="new-receipt"){
-      const ten=tenants.find(x=>x.id===modal.tenantId);
-      return<NewReceiptModal t={t} tenant={ten} receipts={receipts} onClose={()=>setModal(null)} onSave={async(rec)=>{
-        await saveReceipt(rec);
-        showToast("✅ Recibo guardado");
-      }}/>;
-    }
-    if(modal.type==="upload-contract-tenant"){
-      const ten=modal.prefillData||tenants.find(x=>x.id===modal.id);
-      return<UploadContractModal t={t} onClose={()=>setModal(null)} prefill={ten} onSave={async(data)=>{
-        await saveContract({...data,year:data.signYear||new Date().getFullYear(),date:today(),tenantUid:modal.id});
-        showToast("✅ Contrato guardado");
-      }}/>;
-    }
-    if(modal.type==="upload-contract")return<UploadContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
-      const tenantRef=doc(collection(db,"users"));
-      await setDoc(tenantRef,{
-        name:data.tenantName,unit:data.unit,phone:data.phone||"",
-        rent:parseFloat(data.rent)||0,email:data.email||"",role:"tenant",
-        joined:today(),contractStart:data.contractStartISO||"",
-        contractEnd:data.contractEndISO||"",
-        payments:{},costs:[],maintenance:[],lang:"es"
-      });
-      await saveContract({...data,year:data.signYear||new Date().getFullYear(),date:today(),tenantUid:tenantRef.id});
-      showToast("✅ Inquilino y contrato guardados");
-    }}/>;
-    if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
-      const year=data.signYear;
-      try{
-        // Guardar inquilino directamente en Firestore (sin crear cuenta de acceso)
-        const tenantRef=doc(collection(db,"users"));
-        await setDoc(tenantRef,{
-          name:data.tenantName, unit:data.unit, phone:data.phone||"",
-          rent:parseFloat(data.rent), email:data.email||"", role:"tenant",
-          joined:today(), contractStart:data.contractStartISO||"",
-          contractEnd:data.contractEndISO||"",
-          payments:{}, costs:[], maintenance:[], lang:"es"
-        });
-        // Guardar contrato
-        await saveContract({...data, year, date:today(), tenantUid:tenantRef.id});
-        showToast("✅ Inquilino y contrato guardados");
-      }catch(e){
-        showToast("⚠️ Error: "+e.message);
-      }
-    }}/>;
     return null;
   };
 
@@ -965,12 +474,6 @@ export default function App() {
             <button onClick={()=>setSidebarOpen(v=>!v)} style={{background:"none",border:"none",color:"var(--warm)",cursor:"pointer",fontSize:18,padding:"4px 6px",marginLeft:"auto"}}>{sidebarOpen?"◀":"▶"}</button>
           </div>
           {sidebarOpen&&<div className="s-role">{isOwner?t.owner:t.tenant}</div>}
-          {sidebarOpen&&isOwner&&currentProp&&(
-            <div style={{margin:"0 10px 6px",background:"#2A2420",borderRadius:8,padding:"6px 10px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-              <div style={{fontSize:12,color:"var(--cream)",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🏢 {currentProp.name}</div>
-              <button style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:14,padding:"0 0 0 6px",flexShrink:0}} onClick={()=>setCurrentProp(null)} title="Cambiar propiedad">⇄</button>
-            </div>
-          )}
           <nav className="s-nav">
             {nav.map(item=>(
               <button key={item.id} className={activeClass(item.id)} onClick={()=>setPage(item.id)} title={item.label}>
@@ -987,34 +490,20 @@ export default function App() {
             {isOwner&&(
               <div className="notif-wrap">
                 <button className="notif-btn" onClick={e=>{e.stopPropagation();setShowNotif(v=>!v);}}>
-                  🔔{(anniversaries.length>0||freeUnits.length>0)&&<span className="notif-dot"/>}
+                  🔔{anniversaries.length>0&&<span className="notif-dot"/>}
                 </button>
                 {showNotif&&(
                   <div className="notif-panel" onClick={e=>e.stopPropagation()}>
                     <div className="notif-panel-title">{t.notifications}</div>
-                    {anniversaries.length===0&&freeUnits.length===0
+                    {anniversaries.length===0
                       ?<div style={{fontSize:13,color:"var(--warm)"}}>{t.noNotifications}</div>
-                      :<>
-                      {freeUnits.map((u,i)=>(
-                        <div key={"free"+i} className="notif-item">
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                            <span>🟢 <strong>{u.name}</strong> · {u.building} — Libre</span>
-                          </div>
-                        </div>
-                      ))}
-                      {anniversaries.map((a,i)=>(
+                      :anniversaries.map((a,i)=>(
                         <div key={i} className="notif-item">
                           {a.type==="ipc"&&`📈 ${a.tenant.name} · Subida IPC (${a.years} año/s) · desde ${a.tenant.contractStart}`}
                           {a.type==="signed_today"&&`📝 ${a.tenant.name} · ${t.contractSigned} ${a.tenant.contractStart}`}
-                          {a.type==="expiring"&&(
-                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                              <span>⚠️ {a.tenant.name} · expira {a.tenant.contractEnd} ({a.daysLeft} días)</span>
-                              <button className="btn btn-p btn-sm" style={{fontSize:11,padding:"3px 8px",flexShrink:0}} onClick={()=>{setShowNotif(false);setModal({type:"renew-contract",tenantId:a.tenant.id});}}>🔄 Renovar</button>
-                            </div>
-                          )}
+                          {a.type==="expiring"&&`⚠️ ${a.tenant.name} · ${t.contractExpires} ${a.tenant.contractEnd} (${a.daysLeft} días)`}
                         </div>
                       ))}
-                      </>}
                   </div>
                 )}
               </div>
@@ -1025,15 +514,6 @@ export default function App() {
         <main className="content fade" key={page} style={{marginLeft:sidebarOpen?"220px":"64px",transition:"margin-left .25s",minWidth:0,width:"100%"}} onClick={()=>setShowNotif(false)}>
           {!sidebarOpen&&<button className="hamburger-btn" onClick={e=>{e.stopPropagation();setSidebarOpen(true);}}>☰</button>}
           {saving&&<div className="saving">{t.saving}</div>}
-          {isOwner&&freeUnits.length>0&&page==="dashboard"&&freeUnits.map((u,i)=>(
-            <div key={"fu"+i} className="alert-banner" style={{borderLeft:"4px solid #4A9B6F"}}>
-              <div className="al-icon">🟢</div>
-              <div>
-                <div className="al-title">Unidad libre · {u.name}</div>
-                <div className="al-sub">{u.building}</div>
-              </div>
-            </div>
-          ))}
           {isOwner&&anniversaries.length>0&&page==="dashboard"&&anniversaries.map((a,i)=>(
             <div key={i} className="alert-banner">
               <div className="al-icon">{a.type==="expiring"?"⚠️":"🎂"}</div>
@@ -1049,9 +529,6 @@ export default function App() {
                   {a.type==="expiring"&&`${a.tenant.contractEnd} · ${a.daysLeft} días restantes`}
                 </div>
               </div>
-              {a.type==="expiring"&&(
-                <button className="btn btn-p btn-sm" style={{marginLeft:"auto",flexShrink:0}} onClick={()=>setModal({type:"renew-contract",tenantId:a.tenant.id})}>🔄 Renovar</button>
-              )}
             </div>
           ))}
           {renderPage()}
@@ -1060,108 +537,6 @@ export default function App() {
       {modal&&<div className="overlay" onClick={e=>e.target===e.currentTarget&&setModal(null)}>{renderModal()}</div>}
       {toast&&<div className="toast">{toast}</div>}
     </>
-  );
-}
-
-function PropertySelector({user,properties,onSelect,onCreateProp,onUpdateProp,onDeleteProp}){
-  const [creating,setCreating]=useState(false);
-  const [editing,setEditing]=useState(null);
-  const [name,setName]=useState("");
-  const [buildings,setBuildings]=useState([""]);
-  const [editName,setEditName]=useState("");
-  const [editBuildings,setEditBuildings]=useState([]);
-
-  const handleCreate=async()=>{
-    if(!name.trim())return;
-    await onCreateProp(name.trim(),buildings.filter(b=>b.trim()));
-    setCreating(false);setName("");setBuildings([""]);
-  };
-  const handleEdit=(p,e)=>{e.stopPropagation();setEditing(p);setEditName(p.name);setEditBuildings([...(p.buildings||[])]);};
-  const handleSaveEdit=async()=>{
-    await onUpdateProp(editing.id,editName.trim(),editBuildings.filter(b=>b.trim()));
-    setEditing(null);
-  };
-  const addB=()=>setBuildings(b=>[...b,""]);
-  const setB=(i,v)=>setBuildings(b=>b.map((x,j)=>j===i?v:x));
-  const remB=(i)=>setBuildings(b=>b.filter((_,j)=>j!==i));
-  const addEB=()=>setEditBuildings(b=>[...b,""]);
-  const setEB=(i,v)=>setEditBuildings(b=>b.map((x,j)=>j===i?v:x));
-  const remEB=(i)=>setEditBuildings(b=>b.filter((_,j)=>j!==i));
-  const colors=["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"];
-  const iS={width:"100%",background:"#1A1612",border:"1px solid #3A2E28",borderRadius:8,padding:"8px 12px",color:"#F5EFE8",fontFamily:"'DM Sans',sans-serif",fontSize:13,boxSizing:"border-box"};
-
-  return(
-    <div style={{minHeight:"100vh",background:"#1A1612",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'DM Sans',sans-serif"}}>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:36,color:"#F5EFE8",marginBottom:6}}>Mi<span style={{color:"#C4622D",fontStyle:"italic"}}>Alquiler</span></div>
-      <div style={{color:"#8C7B6E",fontSize:14,marginBottom:32}}>Selecciona una propiedad para continuar</div>
-      <div style={{width:"100%",maxWidth:500}}>
-        {properties.length>0&&<>
-          <div style={{color:"#8C7B6E",fontSize:12,textTransform:"uppercase",letterSpacing:".7px",marginBottom:12}}>Tus propiedades</div>
-          {properties.map((p,i)=>(
-            editing?.id===p.id
-            ?<div key={p.id} style={{background:"#261F1B",border:"1px solid #C4622D",borderRadius:14,padding:20,marginBottom:10}}>
-              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:"#F5EFE8",marginBottom:12}}>✏️ Editar propiedad</div>
-              <div style={{marginBottom:10}}>
-                <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Nombre</label>
-                <input value={editName} onChange={e=>setEditName(e.target.value)} style={iS}/>
-              </div>
-              <div style={{marginBottom:10}}>
-                <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Naves / Edificios</label>
-                {editBuildings.map((b,j)=>(
-                  <div key={j} style={{display:"flex",gap:6,marginBottom:6}}>
-                    <input value={b} onChange={e=>setEB(j,e.target.value)} placeholder={"Nave "+(j+1)} style={iS}/>
-                    <button onClick={()=>remEB(j)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:18}}>✕</button>
-                  </div>
-                ))}
-                <button onClick={addEB} style={{background:"none",border:"none",color:"#C4622D",cursor:"pointer",fontSize:13,padding:0}}>+ Añadir nave</button>
-              </div>
-              <div style={{display:"flex",gap:8,marginTop:12}}>
-                <button onClick={()=>setEditing(null)} style={{flex:1,background:"none",border:"1px solid #3A2E28",borderRadius:10,padding:"10px",color:"#8C7B6E",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Cancelar</button>
-                <button onClick={handleSaveEdit} disabled={!editName.trim()} style={{flex:2,background:"#C4622D",border:"none",borderRadius:10,padding:"10px",color:"white",cursor:"pointer",fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>💾 Guardar</button>
-              </div>
-            </div>
-            :<div key={p.id} style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:"16px 20px",marginBottom:10,display:"flex",alignItems:"center",gap:14}}>
-              <div onClick={()=>onSelect(p)} style={{width:44,height:44,borderRadius:12,background:colors[i%colors.length],display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0,cursor:"pointer"}}>🏢</div>
-              <div onClick={()=>onSelect(p)} style={{flex:1,cursor:"pointer"}}>
-                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8"}}>{p.name}</div>
-                {p.buildings?.filter(b=>b).length>0&&<div style={{fontSize:12,color:"#8C7B6E",marginTop:2}}>{p.buildings.filter(b=>b).join(" · ")}</div>}
-              </div>
-              <button onClick={e=>handleEdit(p,e)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:15,padding:"4px 6px"}} title="Editar">✏️</button>
-              <button onClick={e=>{e.stopPropagation();if(window.confirm("¿Eliminar '"+p.name+"'? Los inquilinos no se borrarán."))onDeleteProp(p.id);}} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:15,padding:"4px 6px"}} title="Eliminar">🗑️</button>
-              <div onClick={()=>onSelect(p)} style={{color:"#C4622D",fontSize:20,cursor:"pointer"}}>›</div>
-            </div>
-          ))}
-          <div style={{height:16}}/>
-        </>}
-        {!creating
-          ?<button onClick={()=>setCreating(true)} style={{width:"100%",background:"none",border:"2px dashed #3A2E28",borderRadius:14,padding:"16px",color:"#8C7B6E",cursor:"pointer",fontSize:14,fontFamily:"'DM Sans',sans-serif"}}
-            onMouseEnter={e=>{e.currentTarget.style.borderColor="#C4622D";e.currentTarget.style.color="#F5EFE8";}}
-            onMouseLeave={e=>{e.currentTarget.style.borderColor="#3A2E28";e.currentTarget.style.color="#8C7B6E";}}>
-            ➕ Añadir nueva propiedad
-          </button>
-          :<div style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:20}}>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8",marginBottom:16}}>Nueva propiedad</div>
-            <div style={{marginBottom:12}}>
-              <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Nombre de la propiedad</label>
-              <input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: Calafell, Barcelona..." style={{...iS,padding:"10px 12px"}}/>
-            </div>
-            <div style={{marginBottom:12}}>
-              <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Naves / Edificios (opcional)</label>
-              {buildings.map((b,i)=>(
-                <div key={i} style={{display:"flex",gap:6,marginBottom:6}}>
-                  <input value={b} onChange={e=>setB(i,e.target.value)} placeholder={"Nave "+(i+1)} style={iS}/>
-                  {buildings.length>1&&<button onClick={()=>remB(i)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:18}}>✕</button>}
-                </div>
-              ))}
-              <button onClick={addB} style={{background:"none",border:"none",color:"#C4622D",cursor:"pointer",fontSize:13,padding:0}}>+ Añadir nave</button>
-            </div>
-            <div style={{display:"flex",gap:8,marginTop:16}}>
-              <button onClick={()=>setCreating(false)} style={{flex:1,background:"none",border:"1px solid #3A2E28",borderRadius:10,padding:"10px",color:"#8C7B6E",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Cancelar</button>
-              <button onClick={handleCreate} disabled={!name.trim()} style={{flex:2,background:"#C4622D",border:"none",borderRadius:10,padding:"10px",color:"white",cursor:"pointer",fontWeight:600,fontFamily:"'DM Sans',sans-serif",opacity:name.trim()?1:.5}}>Crear propiedad</button>
-            </div>
-          </div>}
-      </div>
-    </div>
   );
 }
 
@@ -1247,338 +622,93 @@ function Dashboard({t,tenants,onSelect}){
   );
 }
 
-function Tenants({t,tenants,onSelect,onNew,onEdit,onDelete,buildings=[]}){
-  buildings=buildings.filter(b=>b);
-  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
-  const groups={};
-  buildings.forEach(b=>groups[b]=[]);
-  groups["Sin nave asignada"]=[];
-  tenants.forEach(ten=>{
-    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave asignada";
-    groups[b].push(ten);
-  });
-  const allGroups=[...buildings,"Sin nave asignada"].filter(b=>groups[b].length>0);
-  const [openBuilding,setOpenBuilding]=useState(allGroups[0]||null);
-  const [verTodo,setVerTodo]=useState(false);
-
-  const TenantRow=({ten})=>(
-    <div className="t-row">
-      <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
-      <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
-        <strong>{ten.name}</strong>
-        <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
-      </div>
-      <div style={{textAlign:"right",marginRight:8}}>
-        <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
-      </div>
-      <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
-      <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
-      <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDelete(ten.id)}>🗑️</button>
-    </div>
-  );
-
+function Tenants({t,tenants,onSelect,onNew,onEdit}){
   return(
     <div>
       <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div><h2>{t.tenants}</h2><p>{tenants.length} {t.activeTenants.toLowerCase()}</p></div>
-        <div style={{display:"flex",gap:8}}>
-          <button className={`btn btn-sm ${verTodo?"btn-p":"btn-o"}`} onClick={()=>setVerTodo(v=>!v)}>
-            {verTodo?"🏢 Por naves":"🌐 Ver todo"}
-          </button>
-          <button className="btn btn-p" onClick={onNew}>➕ {t.newTenant}</button>
-        </div>
+        <button className="btn btn-p" onClick={onNew}>➕ {t.newTenant}</button>
       </div>
-
-      {tenants.length===0
-        ?<div className="card"><p style={{color:"var(--warm)",fontSize:14,textAlign:"center",padding:20}}>{t.noTenants}</p></div>
-        :verTodo
-          ?<div style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
-            <div style={{background:"var(--terra)",color:"white",padding:"12px 16px"}}>
-              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🌐 Todos los inquilinos</div>
-              <div style={{fontSize:12,opacity:.85,marginTop:2}}>{tenants.length} inquilinos · {tenants.reduce((s,ten)=>s+(ten.rent||0),0)}€/mes</div>
+      {tenants.length===0?<div className="card"><p style={{color:"var(--warm)",fontSize:14,textAlign:"center",padding:20}}>{t.noTenants}</p></div>:
+        tenants.map(ten=>(
+          <div key={ten.id} className="t-row">
+            <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
+            <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
+              <strong>{ten.name}</strong>
+              <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
             </div>
-            <div style={{padding:"0 4px",background:"white"}}>
-              {tenants.map(ten=>(
-                <div key={ten.id} className="t-row">
-                  <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
-                  <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
-                    <strong>{ten.name}</strong>
-                    <span style={{fontSize:10,color:getBuildingColor(ten.building||""),fontWeight:600}}>{ten.building||"Sin nave"}</span>
-                    <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
-                  </div>
-                  <div style={{textAlign:"right",marginRight:8}}>
-                    <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
-                  </div>
-                  <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
-                  <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
-                </div>
-              ))}
+            <div style={{textAlign:"right",marginRight:8}}>
+              <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
             </div>
+            <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
           </div>
-          :allGroups.map(building=>{
-            const isOpen=openBuilding===building;
-            const totalRent=groups[building].reduce((s,ten)=>s+(ten.rent||0),0);
-            return(
-              <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
-                <div style={{background:getBuildingColor(building),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:building)}>
-                  <div>
-                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {building}</div>
-                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{groups[building].length} inquilino{groups[building].length!==1?"s":""} · {totalRent}€/mes</div>
-                  </div>
-                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
-                </div>
-                {isOpen&&(
-                  <div style={{padding:"0 4px",background:"white"}}>
-                    {groups[building].map(ten=><TenantRow key={ten.id} ten={ten}/>)}
-                  </div>
-                )}
-              </div>
-            );
-          })
-      }
+        ))}
     </div>
   );
 }
 
-function Finances(props){
-  const {t,tenants,onToggle,onAddCost,onDeleteCost}=props;
-  const now=new Date();
-  const startYear=2024; const endYear=startYear+15;
-  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-  const allMonths=[];
-  for(let y=startYear;y<endYear;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
+function Finances({t,tenants,onToggle,onAddCost}){
+  const months=["Enero 2025","Febrero 2025","Marzo 2025"];
 
-  const [selYear,setSelYear]=useState(now.getFullYear());
-  const [tab,setTab]=useState("pagos"); // pagos | gastos | graficos
-  const [openBuilding,setOpenBuilding]=useState(null);
-  const [verTodo,setVerTodo]=useState(false);
-  const years=Array.from({length:15},(_,i)=>startYear+i);
-  const monthsOfYear=monthNames.map(m=>`${m} ${selYear}`);
-  const buildings=(props.buildings||[]).filter(b=>b);
-  const getTenantsByBuilding=(b)=>tenants.filter(t=>t.building===b);
-  const getBuildingColor=(_,i)=>["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"][i%7];
-
-  // Chart data for selected year
-  const chartData=monthsOfYear.map(m=>{
+  // Build chart data per month
+  const chartData=months.map(m=>{
     const ingresos=tenants.filter(ten=>(ten.payments||{})[m]?.paid).reduce((s,ten)=>s+(ten.rent||0),0);
-    const gastos=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
-    const inversion=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
-    const profit=ingresos-gastos-inversion;
-    return{name:m.split(" ")[0].slice(0,3),Ingresos:ingresos,Gastos:gastos,Inversión:inversion,Profit:profit};
+    const gastos=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m).reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const profit=ingresos-gastos;
+    return{name:m.split(" ")[0],Ingresos:ingresos,Gastos:gastos,Profit:profit};
   });
-
-  // Yearly totals
-  const totalIngresos=chartData.reduce((s,d)=>s+d.Ingresos,0);
-  const totalGastos=chartData.reduce((s,d)=>s+d.Gastos,0);
-  const totalInversion=chartData.reduce((s,d)=>s+d.Inversión,0);
-  const totalProfit=totalIngresos-totalGastos-totalInversion;
 
   return(
     <div>
-      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
-        <h2>{t.finances}</h2>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <select className="status-sel" style={{padding:"8px 12px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
-            {years.map(y=><option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-          {["pagos","gastos","graficos"].map(tb=>(
-            <button key={tb} className={`chat-tab${tab===tb?" active":""}`} onClick={()=>setTab(tb)}>
-              {tb==="pagos"?"💶 Pagos":tb==="gastos"?"⚡ Gastos":"📊 Gráficos"}
-            </button>
+      <div className="page-hd"><h2>{t.finances}</h2></div>
+      <div className="card">
+        <div className="card-title">📊 Resumen financiero</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={chartData} margin={{top:8,right:16,left:0,bottom:0}}>
+            <XAxis dataKey="name" tick={{fontSize:12}}/>
+            <YAxis tick={{fontSize:12}} unit="€"/>
+            <Tooltip formatter={v=>v+"€"}/>
+            <Legend/>
+            <Bar dataKey="Ingresos" fill="#7A9E7E" radius={[6,6,0,0]}/>
+            <Bar dataKey="Gastos" fill="#D94F3D" radius={[6,6,0,0]}/>
+            <Bar dataKey="Profit" fill="#C4622D" radius={[6,6,0,0]}/>
+          </BarChart>
+        </ResponsiveContainer>
+        <div style={{display:"flex",gap:16,marginTop:16,flexWrap:"wrap"}}>
+          {chartData.map(d=>(
+            <div key={d.name} style={{flex:1,minWidth:100,background:"var(--cream)",borderRadius:12,padding:"12px 16px"}}>
+              <div style={{fontSize:12,color:"var(--warm)",marginBottom:4}}>{d.name}</div>
+              <div style={{fontSize:13}}>🟢 {d.Ingresos}€ · 🔴 {d.Gastos}€ · <strong>{d.Profit>=0?"✅":"⚠️"} {d.Profit}€</strong></div>
+            </div>
           ))}
         </div>
-        {(tab==="pagos"||tab==="gastos")&&(
-          <button className={`btn btn-sm ${verTodo?"btn-p":"btn-o"}`} onClick={()=>setVerTodo(v=>!v)}>
-            {verTodo?"🏢 Por naves":"🌐 Ver todo"}
-          </button>
-        )}
       </div>
-
-      {/* RESUMEN ANUAL */}
-      <div className="stats" style={{marginBottom:20}}>
-        <div className="stat sl"><div className="lbl">Ingresos {selYear}</div><div className="val">{totalIngresos}€</div></div>
-        <div className="stat rl"><div className="lbl">Gastos {selYear}</div><div className="val">{totalGastos}€</div></div>
-        <div className="stat gl"><div className="lbl">Inversión {selYear}</div><div className="val">{totalInversion}€</div></div>
-        <div className="stat tl"><div className="lbl">Profit {selYear}</div><div className="val" style={{color:totalProfit>=0?"var(--green)":"var(--red)"}}>{totalProfit}€</div></div>
+      <div className="card">
+        <div className="card-title">💶 {t.paymentHistory}</div>
+        <div className="tbl-wrap">
+          <table>
+            <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{months.map(m=><th key={m}>{m}</th>)}</tr></thead>
+            <tbody>
+              {tenants.map(ten=>(
+                <tr key={ten.id}>
+                  <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
+                  {months.map(m=>{const p=(ten.payments||{})[m];return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?`✓ ${p.date}`:"✗ Pend."}</span></td>);})}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
-
-      {/* TAB PAGOS */}
-      {tab==="pagos"&&verTodo&&(
-        <div className="card">
-          <div className="card-title">💶 {t.paymentHistory} · {selYear} — Todas las naves</div>
-          <div className="tbl-wrap">
-            <table>
-              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
-              <tbody>
-                {tenants.map(ten=>(
-                  <tr key={ten.id}>
-                    <td><strong>{ten.name}</strong></td>
-                    <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
-                    <td>{ten.unit}</td><td>{ten.rent}€</td>
-                    {monthsOfYear.map(m=>{
-                      const p=(ten.payments||{})[m];
-                      return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <div className="card">
+        <div className="card-title">⚡ {t.costBreakdown}</div>
+        <div className="tbl-wrap">
+          <table>
+            <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>{t.month}</th><th>{t.amount}</th></tr></thead>
+            <tbody>{tenants.flatMap(ten=>(ten.costs||[]).map(c=>(<tr key={c.id}><td>{ten.name}</td><td>{c.icon} {c.name}</td><td>{c.month}</td><td>{c.amount}€</td></tr>)))}</tbody>
+          </table>
         </div>
-      )}
-      {tab==="pagos"&&!verTodo&&(
-        <div>
-          {buildings.map(b=>{
-            const bTenants=getTenantsByBuilding(b);
-            if(bTenants.length===0)return null;
-            const isOpen=openBuilding===b;
-            const totalRent=bTenants.reduce((s,t)=>s+(t.rent||0),0);
-            const paidThisMonth=bTenants.filter(t=>{const m=monthsOfYear[now.getMonth()];return(t.payments||{})[m]?.paid;}).length;
-            return(
-              <div key={b} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
-                <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:b)}>
-                  <div>
-                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
-                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bTenants.length} inquilinos · {totalRent}€/mes · {paidThisMonth}/{bTenants.length} pagados</div>
-                  </div>
-                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
-                </div>
-                {isOpen&&(
-                  <div style={{padding:8,background:"white"}}>
-                    <div className="tbl-wrap">
-                      <table>
-                        <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
-                        <tbody>
-                          {bTenants.map(ten=>(
-                            <tr key={ten.id}>
-                              <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
-                              {monthsOfYear.map(m=>{
-                                const p=(ten.payments||{})[m];
-                                return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
-                              })}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* TAB GASTOS */}
-      {tab==="gastos"&&verTodo&&(
-        <div className="card">
-          <div className="card-title">⚡ {t.costBreakdown} · {selYear} — Todas las naves</div>
-          <div className="tbl-wrap">
-            <table>
-              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
-              <tbody>
-                {tenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>(
-                  <tr key={c.id}>
-                    <td>{ten.name}</td>
-                    <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
-                    <td><div>{c.icon} {c.name}</div>{c.nota&&<div style={{fontSize:11,color:"var(--warm)"}}>📝 {c.nota}</div>}</td>
-                    <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>{c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}</span></td>
-                    <td>{c.month}</td><td>{c.amount}€</td>
-                    <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(ten.id,c.id)}>🗑️</button></td>
-                  </tr>
-                )))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
-        </div>
-      )}
-      {tab==="gastos"&&!verTodo&&(
-        <div>
-          {buildings.map(b=>{
-            const bTenants=getTenantsByBuilding(b);
-            const bCosts=bTenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>({...c,tenantName:ten.name,tenantId:ten.id})));
-            if(bTenants.length===0)return null;
-            const isOpen=openBuilding===("g_"+b);
-            const totalCosts=bCosts.reduce((s,c)=>s+(c.amount||0),0);
-            return(
-              <div key={b} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
-                <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:"g_"+b)}>
-                  <div>
-                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
-                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bCosts.length} gastos · Total: {totalCosts}€</div>
-                  </div>
-                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
-                </div>
-                {isOpen&&(
-                  <div style={{padding:8,background:"white"}}>
-                    {bCosts.length===0
-                      ?<p style={{fontSize:13,color:"var(--warm)",padding:12}}>No hay gastos en {selYear}</p>
-                      :<div className="tbl-wrap">
-                        <table>
-                          <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
-                          <tbody>
-                            {bCosts.map(c=>(
-                              <tr key={c.id}>
-                                <td>{c.tenantName}</td>
-                                <td>
-                                  <div>{c.icon} {c.name}</div>
-                                  {c.nota&&<div style={{fontSize:11,color:"var(--warm)",marginTop:2}}>📝 {c.nota}</div>}
-                                </td>
-                                <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>
-                                  {c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}
-                                </span></td>
-                                <td>{c.month}</td>
-                                <td>{c.amount}€</td>
-                                <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(c.tenantId,c.id)}>🗑️</button></td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
-        </div>
-      )}
-
-      {/* TAB GRAFICOS */}
-      {tab==="graficos"&&(
-        <div className="card">
-          <div className="card-title">📊 Gráfico anual · {selYear}</div>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={chartData} margin={{top:8,right:8,left:0,bottom:0}}>
-              <XAxis dataKey="name" tick={{fontSize:11}}/>
-              <YAxis tick={{fontSize:11}} unit="€"/>
-              <Tooltip formatter={v=>v+"€"}/>
-              <Legend/>
-              <Bar dataKey="Ingresos" fill="#7A9E7E" radius={[4,4,0,0]}/>
-              <Bar dataKey="Gastos" fill="#D94F3D" radius={[4,4,0,0]}/>
-              <Bar dataKey="Inversión" fill="#4F46E5" radius={[4,4,0,0]}/>
-              <Bar dataKey="Profit" fill="#C4622D" radius={[4,4,0,0]}/>
-            </BarChart>
-          </ResponsiveContainer>
-          <div style={{marginTop:16,display:"flex",flexDirection:"column",gap:8}}>
-            {chartData.filter(d=>d.Ingresos>0||d.Gastos>0||d.Inversión>0).map(d=>(
-              <div key={d.name} style={{display:"flex",justifyContent:"space-between",padding:"8px 12px",background:"var(--cream)",borderRadius:10,fontSize:13}}>
-                <span style={{fontWeight:600,width:40}}>{d.name}</span>
-                <span style={{color:"var(--green)"}}>🟢 {d.Ingresos}€</span>
-                <span style={{color:"var(--red)"}}>🔴 {d.Gastos}€</span>
-                <span style={{color:"#4F46E5"}}>🏗️ {d.Inversión}€</span>
-                <span style={{fontWeight:600,color:d.Profit>=0?"var(--green)":"var(--red)"}}>{d.Profit>=0?"✅":"⚠️"} {d.Profit}€</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+      </div>
     </div>
   );
 }
@@ -1806,26 +936,17 @@ function TenantMaintenance({t,profile,onSend}){
   );
 }
 
-function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,onEdit,onUploadContract,contracts,onDelete,onUpdateField}){
-  const now=new Date();
-  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-  const startYear=2024;
-  const allMonths=[];
-  for(let y=startYear;y<startYear+15;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
-  const currentMonth=`${monthNames[now.getMonth()]} ${now.getFullYear()}`;
-
+function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
   const [costType,setCostType]=useState("💡 Electricidad");
-  const [costTipo,setCostTipo]=useState("gasto");
   const [costAmt,setCostAmt]=useState("");
-  const [costMonth,setCostMonth]=useState(currentMonth);
-  const [costNota,setCostNota]=useState("");
+  const [costMonth,setCostMonth]=useState("Marzo 2025");
   const months=Object.keys(tenant?.payments||{});
-  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
+  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","Otro":"📋"};
   if(!tenant)return null;
   const handleAddCost=()=>{
     if(!costAmt||!costMonth)return;
-    const icon=icons[costType]||"📋";const name=costType.replace(/^[^\s]+\s/,"");
-    onAddCost(tenant.id,{icon,name,month:costMonth,amount:parseFloat(costAmt),tipo:costTipo,nota:costNota});setCostAmt("");setCostNota("");
+    const icon=icons[costType]||"📋";const name=costType.replace(/^\S+\s/,"");
+    onAddCost(tenant.id,{icon,name,month:costMonth,amount:parseFloat(costAmt)});setCostAmt("");
   };
   return(
     <div className="modal">
@@ -1833,7 +954,6 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,on
         <h3>{tenant.name}</h3>
         <div style={{display:"flex",gap:8}}>
           <button className="btn btn-o btn-sm" onClick={onEdit}>✏️ {t.editData}</button>
-          <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={onDelete}>🗑️</button>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
       </div>
@@ -1847,97 +967,27 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,on
         <div><div className="pf-lbl">{t.rent}</div><div className="pf-val">{tenant.rent}€/mes</div></div>
         <div><div className="pf-lbl">{t.contractStart}</div><div className="pf-val">{tenant.contractStart||"—"}</div></div>
         <div><div className="pf-lbl">{t.contractEnd}</div><div className="pf-val">{tenant.contractEnd||"—"}</div></div>
-        <div><div className="pf-lbl">📅 Frecuencia pago</div><div className="pf-val">{tenant.payFreq||"mensual"}</div></div>
-        <div><div className="pf-lbl">🔒 Fianza</div><div className="pf-val">{tenant.fianza==="si"?`✅ ${tenant.fianzaAmount||0}€`:"❌ No"}</div></div>
-        <div style={{gridColumn:"1/-1"}}>
-          <div className="pf-lbl">🧾 Tipo de documento</div>
-          <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
-            <button className={`btn btn-sm ${(tenant.docType||"recibo")==="recibo"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","recibo")}>🧾 Recibo</button>
-            <button className={`btn btn-sm ${tenant.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","factura")}>🧾 Factura</button>
-            <button className={`btn btn-sm ${tenant.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","ambos")}>🧾 Ambos</button>
-          </div>
-          {tenant.docType==="ambos"&&(
-            <div style={{marginTop:8,background:"var(--cream)",borderRadius:10,padding:10,fontSize:13}}>
-              <div style={{display:"flex",justifyContent:"space-between"}}>
-                <span style={{color:"var(--warm)"}}>Importe Recibo</span><strong>{tenant.rentRecibo||0}€</strong>
-              </div>
-              <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
-                <span style={{color:"var(--warm)"}}>Importe Factura</span><strong>{tenant.rentFactura||0}€</strong>
-              </div>
-            </div>
-          )}
-        </div>
-        {tenant.notes&&<div style={{gridColumn:"1/-1"}}>
-          <div className="pf-lbl">📝 Notas</div>
-          <div className="pf-val" style={{fontSize:13,whiteSpace:"pre-wrap"}}>{tenant.notes}</div>
-        </div>}
       </div>
-      <hr/>
-      <div className="serif" style={{fontSize:16,marginBottom:12}}>📝 Contratos</div>
-      {(contracts||[]).filter(c=>c.tenantUid===tenant.id).length===0
-        ?<p style={{fontSize:13,color:"var(--warm)",marginBottom:8}}>No hay contratos adjuntos</p>
-        :(contracts||[]).filter(c=>c.tenantUid===tenant.id).map(c=>(
-          <div key={c.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
-            <span style={{fontSize:22}}>📄</span>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,fontSize:13}}>{c.unit||tenant.unit}</div>
-              <div style={{fontSize:11,color:"var(--warm)"}}>{c.startDay}/{c.startMonth}/{c.startYear} → {c.endDay}/{c.endMonth}/{c.endYear} · {c.rent}€/mes</div>
-            </div>
-            <button className="btn btn-o btn-sm" onClick={()=>generateContractDocx(c)}>📥</button>
-          </div>
-        ))}
-      <button className="btn btn-o" style={{marginBottom:16,marginTop:8}} onClick={onUploadContract}>➕ Adjuntar contrato</button>
       <hr/>
       <div className="serif" style={{fontSize:16,marginBottom:12}}>{t.paymentHistory}</div>
       {months.map(m=>{const p=(tenant.payments||{})[m];return(<div key={m} className="cr"><div className="cn">{m}</div><div style={{display:"flex",alignItems:"center",gap:8}}><span className="badge" style={p.paid?{background:"#E6F4ED",color:"#4A9B6F"}:{background:"#FDECEA",color:"#D94F3D"}}>{p.paid?`✓ ${p.date}`:"✗ Pendiente"}</span><button className="btn btn-o btn-sm" onClick={()=>onToggle(tenant.id,m)}>{p.paid?t.revert:t.markPaid}</button></div></div>);})}
       <hr/>
-      <div className="serif" style={{fontSize:16,marginBottom:12}}>⚡ Costes registrados</div>
-      {(tenant.costs||[]).length===0
-        ?<p style={{fontSize:13,color:"var(--warm)",marginBottom:12}}>{t.noCosts}</p>
-        :(tenant.costs||[]).map(c=>(
-          <div key={c.id} style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
-            <div style={{flex:1}}>
-              <div style={{fontSize:14}}>{c.icon} {c.name} · <strong>{c.amount}€</strong></div>
-              <div style={{fontSize:12,color:"var(--warm)"}}>{c.month} · {c.tipo==="inversion"?"🏗️ Inversión (tuya)":"💸 Gasto"}</div>
-              {c.nota&&<div style={{fontSize:12,color:"#555",marginTop:2}}>📝 {c.nota}</div>}
-            </div>
-            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)",marginLeft:8,flexShrink:0}} onClick={()=>onDeleteCost(tenant.id,c.id)}>🗑️</button>
-          </div>
-        ))}
-      <div style={{marginBottom:16}}/>
       <div className="serif" style={{fontSize:16,marginBottom:12}}>➕ {t.addCost}</div>
-      <div className="fg">
-        <label>Tipo</label>
-        <div style={{display:"flex",gap:8,marginTop:4}}>
-          <button className={`btn btn-sm ${costTipo==="gasto"?"btn-p":"btn-o"}`} onClick={()=>setCostTipo("gasto")}>💸 Gasto</button>
-          <button className={`btn btn-sm ${costTipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setCostTipo("inversion")}>🏗️ Inversión (mía)</button>
-        </div>
-      </div>
       <div className="gr2">
-        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
         <div className="fg"><label>{t.amount}</label><input type="number" value={costAmt} onChange={e=>setCostAmt(e.target.value)} placeholder="0"/></div>
       </div>
-      <div className="fg"><label>{t.month}</label>
-        <select value={costMonth} onChange={e=>setCostMonth(e.target.value)}>
-          {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
-        </select>
-      </div>
-      <div className="fg"><label>📝 Nota (opcional)</label><textarea value={costNota} onChange={e=>setCostNota(e.target.value)} placeholder="Ej: Cambio de caldera..."/></div>
+      <div className="fg"><label>{t.month}</label><input value={costMonth} onChange={e=>setCostMonth(e.target.value)}/></div>
       <button className="btn btn-p" onClick={handleAddCost}>➕ {t.addCost}</button>
     </div>
   );
 }
 
-function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
+function EditTenantModal({t,tenant,onClose,onSave}){
   const [form,setForm]=useState({
     name:tenant?.name||"",unit:tenant?.unit||"",phone:tenant?.phone||"",
     rent:tenant?.rent||"",email:tenant?.email||"",
-    contractStart:tenant?.contractStart||"",contractEnd:tenant?.contractEnd||"",
-    building:tenant?.building||"",docType:tenant?.docType||"recibo",
-    payFreq:tenant?.payFreq||"mensual",fianza:tenant?.fianza||"no",
-    fianzaAmount:tenant?.fianzaAmount||"",notes:tenant?.notes||"",
-    rentRecibo:tenant?.rentRecibo||"",rentFactura:tenant?.rentFactura||"",
-    ipcEnabled:tenant?.ipcEnabled||"si"
+    contractStart:tenant?.contractStart||"",contractEnd:tenant?.contractEnd||""
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(!tenant)return null;
@@ -1945,12 +995,6 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
     <div className="modal">
       <div className="modal-hd"><h3>✏️ {t.editTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
       <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
-      <div className="fg"><label>🏢 Nave / Edificio</label>
-        <select value={form.building} onChange={e=>set("building",e.target.value)}>
-          <option value="">— Sin nave asignada —</option>
-          {(propBuildings||[]).filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
-        </select>
-      </div>
       <div className="gr2">
         <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
         <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
@@ -1964,1402 +1008,51 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
         <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
         <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
       </div>
-      <div className="fg">
-        <label>🧾 Tipo de documento</label>
-        <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
-          <button className={`btn btn-sm ${form.docType==="recibo"?"btn-p":"btn-o"}`} onClick={()=>set("docType","recibo")}>🧾 Recibo</button>
-          <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
-          <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
-        </div>
-        {form.docType==="ambos"&&(
-          <div style={{marginTop:10,background:"var(--cream)",borderRadius:10,padding:12}}>
-            <p style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Divide el importe entre recibo y factura:</p>
-            <div className="gr2">
-              <div className="fg"><label>Importe Recibo €</label><input type="number" placeholder="0" value={form.rentRecibo||""} onChange={e=>set("rentRecibo",e.target.value)}/></div>
-              <div className="fg"><label>Importe Factura €</label><input type="number" placeholder="0" value={form.rentFactura||""} onChange={e=>set("rentFactura",e.target.value)}/></div>
-            </div>
-            {form.rentRecibo&&form.rentFactura&&<p style={{fontSize:11,marginTop:4,color:"var(--sage)",fontWeight:600}}>Total: {(parseFloat(form.rentRecibo||0)+parseFloat(form.rentFactura||0))}€</p>}
-          </div>
-        )}
-      </div>
-      <div className="fg">
-        <label>📅 Frecuencia de pago</label>
-        <select value={form.payFreq} onChange={e=>set("payFreq",e.target.value)}>
-          <option value="mensual">Mensual</option>
-          <option value="2meses">Cada 2 meses</option>
-          <option value="3meses">Cada 3 meses</option>
-          <option value="4meses">Cada 4 meses</option>
-          <option value="6meses">Cada 6 meses</option>
-        </select>
-      </div>
-      <div className="fg">
-        <label>📈 Subida IPC anual</label>
-        <div style={{display:"flex",gap:8,marginTop:6}}>
-          <button className={`btn btn-sm ${form.ipcEnabled==="si"?"btn-p":"btn-o"}`} onClick={()=>set("ipcEnabled","si")}>✅ Sí</button>
-          <button className={`btn btn-sm ${form.ipcEnabled==="no"?"btn-o":"btn-o"}`} onClick={()=>set("ipcEnabled","no")}>❌ No</button>
-        </div>
-      </div>
-      <div className="fg">
-        <label>🔒 Fianza</label>
-        <div style={{display:"flex",gap:8,marginTop:6}}>
-          <button className={`btn btn-sm ${form.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>set("fianza","si")}>✅ Sí</button>
-          <button className={`btn btn-sm ${form.fianza==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("fianza","no")}>❌ No</button>
-        </div>
-        {form.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe €" value={form.fianzaAmount} onChange={e=>set("fianzaAmount",e.target.value)}/>}
-      </div>
-      <div className="fg">
-        <label>📝 Notas</label>
-        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} rows={3} style={{width:"100%",padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/>
-      </div>
       <button className="btn btn-p btn-full" onClick={()=>onSave(tenant.id,form)}>💾 {t.save}</button>
     </div>
   );
 }
 
-function NewTenantModal({t,onClose,onSave,onAddContract,buildings=[]}){
-  const [form,setForm]=useState({
-    name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",
-    building:"",docType:"recibo",payFreq:"mensual",
-    fianza:"",fianzaAmount:"",
-    ipcEnabled:"si",
-    notes:""
-  });
-  const [saved,setSaved]=useState(false);
-  const [savedId,setSavedId]=useState(null);
+function NewTenantModal({t,onClose,onSave}){
+  const [form,setForm]=useState({name:"",unit:"",phone:"",rent:"",email:"",password:"",contractStart:"",contractEnd:""});
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-
-  const handleSave=async()=>{
-    const id=await onSave(form);
-    setSavedId(id);
-    setSaved(true);
-  };
-
   return(
     <div className="modal">
       <div className="modal-hd"><h3>➕ {t.newTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-      {!saved?<>
-        <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
-        <div className="fg"><label>🏢 Nave / Edificio</label>
-          <select value={form.building} onChange={e=>set("building",e.target.value)}>
-            <option value="">— Seleccionar nave —</option>
-            {buildings.filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
-          </select>
-        </div>
-        <div className="gr2">
-          <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Trastero 7, Local 2..."/></div>
-          <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
-        </div>
-        <div className="fg"><label>{t.rent} €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
-        <div className="gr2">
-          <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
-          <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
-        </div>
-        <hr/>
-        <div className="fg">
-          <label>🧾 Tipo de documento</label>
-          <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
-            <button className={`btn btn-sm ${form.docType==="recibo"?"btn-p":"btn-o"}`} onClick={()=>set("docType","recibo")}>🧾 Recibo</button>
-            <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
-            <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
-          </div>
-          {form.docType==="ambos"&&(
-            <div style={{marginTop:10,background:"var(--cream)",borderRadius:10,padding:12}}>
-              <p style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Divide el importe total entre recibo y factura:</p>
-              <div className="gr2">
-                <div className="fg"><label>Importe Recibo €</label><input type="number" placeholder="0" value={form.rentRecibo||""} onChange={e=>set("rentRecibo",e.target.value)}/></div>
-                <div className="fg"><label>Importe Factura €</label><input type="number" placeholder="0" value={form.rentFactura||""} onChange={e=>set("rentFactura",e.target.value)}/></div>
-              </div>
-              {form.rentRecibo&&form.rentFactura&&<p style={{fontSize:11,marginTop:4,color:"var(--sage)",fontWeight:600}}>Total: {(parseFloat(form.rentRecibo||0)+parseFloat(form.rentFactura||0))}€</p>}
-            </div>
-          )}
-        </div>
-        <div className="fg">
-          <label>📅 Frecuencia de pago</label>
-          <select value={form.payFreq} onChange={e=>set("payFreq",e.target.value)} style={{marginTop:4}}>
-            <option value="mensual">Mensual</option>
-            <option value="2meses">Cada 2 meses</option>
-            <option value="3meses">Cada 3 meses</option>
-            <option value="4meses">Cada 4 meses</option>
-            <option value="6meses">Cada 6 meses</option>
-          </select>
-        </div>
-        <div className="fg">
-          <label>📈 Subida IPC anual</label>
-          <div style={{display:"flex",gap:8,marginTop:6}}>
-            <button className={`btn btn-sm ${form.ipcEnabled==="si"?"btn-p":"btn-o"}`} onClick={()=>set("ipcEnabled","si")}>✅ Sí, aplicar IPC</button>
-            <button className={`btn btn-sm ${form.ipcEnabled==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("ipcEnabled","no")}>❌ No</button>
-          </div>
-          <p style={{fontSize:11,color:"var(--warm)",marginTop:4}}>{form.ipcEnabled==="si"?"Se te avisará cada año para aplicar la subida IPC + 1,5%":"Sin subida automática de IPC"}</p>
-        </div>
-        <hr/>
-        <div className="fg">
-          <label>🔒 Fianza</label>
-          <div style={{display:"flex",gap:8,marginTop:6}}>
-            <button className={`btn btn-sm ${form.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>set("fianza","si")}>✅ Sí, me han dado fianza</button>
-            <button className={`btn btn-sm ${form.fianza==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("fianza","no")}>❌ No</button>
-          </div>
-          {form.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe fianza €" value={form.fianzaAmount} onChange={e=>set("fianzaAmount",e.target.value)}/>}
-        </div>
-        <div className="fg">
-          <label>📝 Notas / Comentarios</label>
-          <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} placeholder="Observaciones, acuerdos especiales..." rows={3} style={{width:"100%",padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/>
-        </div>
-        <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.name||!form.unit||!form.rent}>
-          ✅ Crear inquilino
-        </button>
-      </>:<>
-        <div style={{textAlign:"center",padding:"16px 0"}}>
-          <div style={{fontSize:48,marginBottom:10}}>🎉</div>
-          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,marginBottom:6}}>{form.name} creado</h3>
-          <p style={{color:"var(--warm)",fontSize:13,marginBottom:20}}>El inquilino ya aparece en la lista.</p>
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            <button className="btn btn-p" onClick={()=>{onAddContract(savedId,form);onClose();}}>
-              📝 Añadir contrato
-            </button>
-            <button className="btn btn-o" onClick={onClose}>Cerrar</button>
-          </div>
-        </div>
-      </>}
+      <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
+      <div className="gr2">
+        <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
+        <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>{t.rent}</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
+      <div className="gr2">
+        <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
+        <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
+      </div>
+      <hr/>
+      <div className="fg"><label>{t.email} (acceso)</label><input type="email" value={form.email} onChange={e=>set("email",e.target.value)}/></div>
+      <div className="fg"><label>{t.password}</label><input type="password" value={form.password} onChange={e=>set("password",e.target.value)}/></div>
+      <button className="btn btn-p btn-full" onClick={()=>onSave(form)}>{t.createAccess}</button>
     </div>
   );
 }
 
 function AddCostModal({t,tenants,onSave,onClose}){
-  const now=new Date();
-  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-  const startYear=2024; const endYear=startYear+15;
-  const allMonths=[];
-  for(let y=startYear;y<endYear;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
-  const currentMonth=`${monthNames[now.getMonth()]} ${now.getFullYear()}`;
-
   const [tid,setTid]=useState(tenants[0]?.id||"");
   const [costType,setCostType]=useState("💡 Electricidad");
-  const [tipo,setTipo]=useState("gasto"); // gasto | inversion
-  const [amount,setAmount]=useState("");
-  const [month,setMonth]=useState(currentMonth);
-  const [nota,setNota]=useState("");
-  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
-  const handle=()=>{
-    if(!amount)return;
-    const icon=icons[costType]||"📋";
-    const name=costType.replace(/^\S+\s/,"");
-    onSave(tid,{icon,name,month,amount:parseFloat(amount),tipo,nota});
-  };
+  const [amount,setAmount]=useState("");const [month,setMonth]=useState("Marzo 2025");
+  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","Otro":"📋"};
+  const handle=()=>{if(!amount)return;const icon=icons[costType]||"📋";const name=costType.replace(/^\S+\s/,"");onSave(tid,{icon,name,month,amount:parseFloat(amount)});};
   return(
     <div className="modal">
       <div className="modal-hd"><h3>➕ {t.addCost}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
       <div className="fg"><label>{t.tenant}</label><select value={tid} onChange={e=>setTid(e.target.value)}>{tenants.map(ten=><option key={ten.id} value={ten.id}>{ten.name} ({ten.unit})</option>)}</select></div>
-      <div className="fg">
-        <label>Tipo</label>
-        <div style={{display:"flex",gap:10,marginTop:4}}>
-          <button className={`btn btn-sm ${tipo==="gasto"?"btn-p":"btn-o"}`} onClick={()=>setTipo("gasto")}>💸 Gasto</button>
-          <button className={`btn btn-sm ${tipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setTipo("inversion")}>🏗️ Inversión (mía)</button>
-        </div>
-        {tipo==="inversion"&&<p style={{fontSize:12,color:"var(--warm)",marginTop:6}}>Esta inversión la asumes tú, no se carga al inquilino</p>}
-      </div>
       <div className="gr2">
-        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
         <div className="fg"><label>{t.amount}</label><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"/></div>
       </div>
-      <div className="fg"><label>{t.month}</label>
-        <select value={month} onChange={e=>setMonth(e.target.value)}>
-          {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
-        </select>
-      </div>
-      <div className="fg"><label>📝 Nota (opcional)</label><textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Cambio de caldera, pintura piso..."/></div>
+      <div className="fg"><label>{t.month}</label><input value={month} onChange={e=>setMonth(e.target.value)}/></div>
       <button className="btn btn-p btn-full" onClick={handle}>{t.save}</button>
-    </div>
-  );
-}
-
-function DocumentsPage({t,tenants,documents,onGenerate}){
-  const startYear=2024; const endYear=startYear+15;
-  const years=Array.from({length:15},(_,i)=>startYear+i);
-  const now=new Date();
-  const [selYear,setSelYear]=useState(now.getFullYear());
-  const [generating,setGenerating]=useState(false);
-
-  const handle=async()=>{
-    setGenerating(true);
-    await onGenerate(selYear);
-    setGenerating(false);
-  };
-
-  // Summary for selected year
-  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-  const months=monthNames.map(m=>`${m} ${selYear}`);
-  const totI=months.reduce((s,m)=>s+tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((ss,t)=>ss+(t.rent||0),0),0);
-  const totG=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
-  const totInv=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
-  const profit=totI-totG-totInv;
-
-  return(
-    <div>
-      <div className="page-hd"><h2>📁 {t.documents}</h2><p>Resúmenes anuales en Excel</p></div>
-
-      <div className="card">
-        <div className="card-title">📊 {t.generateExcel}</div>
-        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:20}}>
-          <select className="status-sel" style={{padding:"10px 14px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
-            {years.map(y=><option key={y} value={y}>{y}</option>)}
-          </select>
-          <button className="btn btn-p" onClick={handle} disabled={generating}>
-            {generating?"⏳ Generando...":"📥 Generar Excel "+selYear}
-          </button>
-        </div>
-
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:8}}>
-          <div style={{background:"#E6F4ED",borderRadius:12,padding:"14px 16px"}}>
-            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INGRESOS {selYear}</div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--green)"}}>{totI}€</div>
-          </div>
-          <div style={{background:"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
-            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>GASTOS {selYear}</div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--red)"}}>{totG}€</div>
-          </div>
-          <div style={{background:"#EEF2FF",borderRadius:12,padding:"14px 16px"}}>
-            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INVERSIÓN {selYear}</div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#4F46E5"}}>{totInv}€</div>
-          </div>
-          <div style={{background:profit>=0?"#E6F4ED":"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
-            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>PROFIT {selYear}</div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:profit>=0?"var(--green)":"var(--red)"}}>{profit}€</div>
-          </div>
-        </div>
-        <p style={{fontSize:12,color:"var(--warm)",marginTop:8}}>El Excel incluye 4 hojas: Resumen, Pagos, Gastos e Inquilinos</p>
-      </div>
-
-      <div className="card">
-        <div className="card-title">🗂️ Documentos generados</div>
-        {documents.length===0
-          ?<p style={{color:"var(--warm)",fontSize:14}}>{t.noDocuments}</p>
-          :documents.map(doc=>(
-            <div key={doc.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 0",borderBottom:"1px solid var(--border)"}}>
-              <div>
-                <div style={{fontWeight:600,fontSize:15}}>📊 MiAlquiler_Resumen_{doc.year}.xlsx</div>
-                <div style={{fontSize:12,color:"var(--warm)",marginTop:3}}>
-                  Generado el {doc.date} · Ingresos: {doc.totI}€ · Gastos: {doc.totG}€ · Profit: <span style={{color:doc.profit>=0?"var(--green)":"var(--red)",fontWeight:600}}>{doc.profit}€</span>
-                </div>
-              </div>
-              <button className="btn btn-o btn-sm" onClick={()=>generateAnnualExcel(tenants,doc.year)}>
-                📥 {t.downloadDoc}
-              </button>
-            </div>
-          ))}
-      </div>
-    </div>
-  );
-}
-
-function ContractsPage({t,contracts,onNew,onUpload,onDownload,onDelete}){
-  const byYear={};
-  contracts.forEach(c=>{
-    const y=c.year||c.signYear||"Sin año";
-    if(!byYear[y])byYear[y]=[];
-    byYear[y].push(c);
-  });
-  const years=Object.keys(byYear).sort((a,b)=>b-a);
-  return(
-    <div>
-      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-        <div><h2>📝 {t.contracts}</h2><p>{contracts.length} contratos</p></div>
-        <div style={{display:"flex",gap:8}}>
-          <button className="btn btn-o" onClick={onUpload}>📤 Subir contrato firmado</button>
-          <button className="btn btn-p" onClick={onNew}>➕ {t.newContract}</button>
-        </div>
-      </div>
-      {contracts.length===0
-        ?<div className="card"><p style={{color:"var(--warm)",textAlign:"center",padding:20}}>📂 {t.noContracts}</p></div>
-        :years.map(year=>(
-          <div key={year} className="card">
-            <div className="card-title">📁 {year}</div>
-            {byYear[year].map(c=>(
-              <div key={c.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 0",borderBottom:"1px solid var(--border)"}}>
-                <div style={{fontSize:28}}>📄</div>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600,fontSize:15}}>📄 {c.unit} — {c.tenantName}</div>
-                  <div style={{fontSize:12,color:"var(--warm)",marginTop:2}}>
-                    Firmado el {c.signDay}/{c.signMonth}/{c.signYear} · {c.startDay}/{c.startMonth}/{c.startYear} → {c.endDay}/{c.endMonth}/{c.endYear} · {c.rent}€/mes
-                  </div>
-                </div>
-                <button className="btn btn-o btn-sm" onClick={()=>onDownload(c)}>📥 {t.downloadDoc}</button>
-                <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar este contrato?"))onDelete(c.id);}}>🗑️</button>
-              </div>
-            ))}
-          </div>
-        ))}
-    </div>
-  );
-}
-
-function UploadContractModal({t,onClose,onSave,prefill}){
-  const [step,setStep]=useState(1);
-  const [pdfName,setPdfName]=useState("");
-  const [saving,setSaving]=useState(false);
-  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-  const now=new Date();
-  const [form,setForm]=useState({
-    unit:prefill?.unit||"",tenantName:prefill?.name||"",tenantDni:prefill?.dni||"",
-    tenantAddress:prefill?.address||"",phone:prefill?.phone||"",email:prefill?.email||"",
-    rent:prefill?.rent||"",
-    signDay:"",signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
-    startDay:prefill?.contractStart?.split("-")[2]||"1",
-    startMonth:prefill?.contractStart?monthNames[parseInt(prefill.contractStart.split("-")[1])-1]:monthNames[now.getMonth()],
-    startYear:prefill?.contractStart?.split("-")[0]||String(now.getFullYear()),
-    endDay:prefill?.contractEnd?.split("-")[2]||"",
-    endMonth:prefill?.contractEnd?monthNames[parseInt(prefill.contractEnd.split("-")[1])-1]:"",
-    endYear:prefill?.contractEnd?.split("-")[0]||"",
-  });
-  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-  const toISO=(day,month,year)=>{const idx=monthNames.indexOf((month||"").toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
-
-  const handleSave=async()=>{
-    setSaving(true);
-    await onSave({...form,
-      contractStartISO:toISO(form.startDay,form.startMonth,form.startYear),
-      contractEndISO:toISO(form.endDay,form.endMonth,form.endYear),
-    });
-    setSaving(false);
-    setStep(2);
-  };
-
-  const bar=(active,total)=>(
-    <div style={{display:"flex",gap:6,marginBottom:18}}>
-      {Array.from({length:total},(_,i)=>(
-        <div key={i} style={{flex:1,height:4,borderRadius:4,background:i<active?"var(--terra)":"var(--border)"}}/>
-      ))}
-    </div>
-  );
-
-  return(
-    <div className="modal" style={{maxWidth:560}}>
-      {step===1&&<>
-        <div className="modal-hd"><h3>📤 Subir contrato firmado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(1,2)}
-        <p style={{fontSize:13,color:"var(--warm)",marginBottom:16}}>Introduce los datos del contrato firmado.</p>
-
-        <div className="fg"><label>Piso / Habitación / Trastero</label>
-          <input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Trastero 7, Piso 1..."/>
-        </div>
-        <div className="gr2">
-          <div className="fg"><label>Nombre completo inquilino</label>
-            <input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/>
-          </div>
-          <div className="fg"><label>DNI / NIE</label>
-            <input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/>
-          </div>
-        </div>
-        <div className="fg"><label>Domicilio del inquilino</label>
-          <input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/>
-        </div>
-        <div className="gr2">
-          <div className="fg"><label>Teléfono</label>
-            <input value={form.phone} onChange={e=>set("phone",e.target.value)}/>
-          </div>
-          <div className="fg"><label>Alquiler €/mes</label>
-            <input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/>
-          </div>
-        </div>
-        <hr/>
-        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas del contrato</div>
-        <div className="gr2">
-          <div className="fg"><label>Fecha de firma</label>
-            <div style={{display:"flex",gap:4}}>
-              <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
-              <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
-              <input style={{width:52}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
-            </div>
-          </div>
-          <div className="fg"><label>Inicio</label>
-            <div style={{display:"flex",gap:4}}>
-              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
-              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
-              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
-            </div>
-          </div>
-        </div>
-        <div className="fg"><label>Fin del contrato</label>
-          <div style={{display:"flex",gap:4}}>
-            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)} placeholder="día"/>
-            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)} placeholder="mes"/>
-            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)} placeholder="año"/>
-          </div>
-        </div>
-        <hr/>
-        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Adjuntar PDF (opcional)</div>
-        <label style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",background:"var(--cream)",borderRadius:10,cursor:"pointer",marginBottom:16}}>
-          <span style={{fontSize:20}}>📎</span>
-          <span style={{fontSize:13,color:"var(--warm)"}}>{pdfName||"Seleccionar PDF del contrato"}</span>
-          <input type="file" accept=".pdf" onChange={e=>setPdfName(e.target.files[0]?.name||"")} style={{display:"none"}}/>
-        </label>
-        <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.unit||!form.tenantName||!form.rent||saving}>
-          {saving?"⏳ Guardando...":"✅ Guardar contrato y crear inquilino"}
-        </button>
-      </>}
-
-      {step===2&&<>
-        <div className="modal-hd"><h3>✅ ¡Listo!</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(2,2)}
-        <div style={{textAlign:"center",padding:"20px 0"}}>
-          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
-          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:8}}>¡Contrato guardado!</h3>
-          <p style={{color:"var(--warm)",fontSize:14,marginBottom:20}}>
-            <strong>{form.tenantName}</strong> ya aparece en Inquilinos.<br/>El contrato está guardado en Contratos.
-          </p>
-          <div style={{background:"var(--cream)",borderRadius:12,padding:14,textAlign:"left",fontSize:13,marginBottom:20}}>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Piso</span><strong>{form.unit}</strong></div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.tenantName}</strong></div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
-          </div>
-          <button className="btn btn-o" onClick={onClose}>Cerrar</button>
-        </div>
-      </>}
-    </div>
-  );
-}
-
-function SignaturePad({name,onSign}){
-  const canvasRef=useRef(null);
-  const drawing=useRef(false);
-  const [hasSignature,setHasSignature]=useState(false);
-
-  const getPos=(e,canvas)=>{
-    const rect=canvas.getBoundingClientRect();
-    const scaleX=canvas.width/rect.width;
-    const scaleY=canvas.height/rect.height;
-    const src=e.touches?e.touches[0]:e;
-    return{x:(src.clientX-rect.left)*scaleX,y:(src.clientY-rect.top)*scaleY};
-  };
-
-  const startDraw=(e)=>{
-    e.preventDefault();
-    const canvas=canvasRef.current;
-    const ctx=canvas.getContext("2d");
-    const pos=getPos(e,canvas);
-    ctx.beginPath();
-    ctx.moveTo(pos.x,pos.y);
-    drawing.current=true;
-  };
-
-  const draw=(e)=>{
-    e.preventDefault();
-    if(!drawing.current)return;
-    const canvas=canvasRef.current;
-    const ctx=canvas.getContext("2d");
-    ctx.lineWidth=2.5;
-    ctx.lineCap="round";
-    ctx.lineJoin="round";
-    ctx.strokeStyle="#1A1612";
-    const pos=getPos(e,canvas);
-    ctx.lineTo(pos.x,pos.y);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(pos.x,pos.y);
-  };
-
-  const endDraw=(e)=>{
-    e.preventDefault();
-    if(!drawing.current)return;
-    drawing.current=false;
-    const canvas=canvasRef.current;
-    const dataUrl=canvas.toDataURL("image/png");
-    setHasSignature(true);
-    onSign(dataUrl);
-  };
-
-  const clear=()=>{
-    const canvas=canvasRef.current;
-    const ctx=canvas.getContext("2d");
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    setHasSignature(false);
-    onSign(null);
-  };
-
-  return(
-    <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-        <div style={{fontSize:13,fontWeight:600}}>✍️ Firma de {name}</div>
-        {hasSignature&&<button className="btn btn-o btn-sm" onClick={clear}>🗑️ Borrar</button>}
-      </div>
-      <div style={{border:"2px solid var(--border)",borderRadius:12,overflow:"hidden",background:"white",touchAction:"none"}}>
-        <canvas
-          ref={canvasRef}
-          width={520} height={160}
-          style={{width:"100%",height:160,display:"block",cursor:"crosshair"}}
-          onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
-          onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
-        />
-      </div>
-      {!hasSignature&&<p style={{fontSize:11,color:"var(--warm)",marginTop:4,textAlign:"center"}}>Firma con el dedo o Apple Pencil</p>}
-      {hasSignature&&<p style={{fontSize:11,color:"#4A9B6F",marginTop:4,textAlign:"center",fontWeight:600}}>✅ Firma registrada</p>}
-    </div>
-  );
-}
-
-function NewContractModal({t,onClose,onSave}){
-  const now=new Date();
-  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-  const [step,setStep]=useState(1);
-  const [tenantSigned,setTenantSigned]=useState(false);
-  const [saving,setSaving]=useState(false);
-  const [savedData,setSavedData]=useState(null);
-  const [form,setForm]=useState({
-    unit:"",tenantName:"",tenantDni:"",tenantAddress:"",phone:"",email:"",password:"",rent:"",
-    signDay:String(now.getDate()),signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
-    startDay:"1",startMonth:monthNames[now.getMonth()],startYear:String(now.getFullYear()),
-    endDay:"28",endMonth:monthNames[now.getMonth()],endYear:String(now.getFullYear()+2),
-  });
-  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-  const toISO=(day,month,year)=>{const idx=monthNames.indexOf(month.toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
-
-  const handleSign=async()=>{
-    if(!tenantSigned)return;
-    setSaving(true);
-    const data={...form,contractStartISO:toISO(form.startDay,form.startMonth,form.startYear),contractEndISO:toISO(form.endDay,form.endMonth,form.endYear)};
-    await onSave(data);
-    setSavedData(data);
-    setSaving(false);
-    setStep(3);
-  };
-
-  const bar=(active,total)=>(
-    <div style={{display:"flex",gap:6,marginBottom:18}}>
-      {Array.from({length:total},(_,i)=>(
-        <div key={i} style={{flex:1,height:4,borderRadius:4,background:i<active?"var(--terra)":"var(--border)"}}/>
-      ))}
-    </div>
-  );
-
-  return(
-    <div className="modal" style={{maxWidth:560}}>
-      {step===1&&<>
-        <div className="modal-hd"><h3>📋 {t.contractDetails}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(1,3)}
-        <div className="fg"><label>Piso / Habitación / Trastero</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Piso 1, Trastero 3..."/></div>
-        <div className="gr2">
-          <div className="fg"><label>{t.name}</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/></div>
-          <div className="fg"><label>{t.dni}</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/></div>
-        </div>
-        <div className="fg"><label>{t.address}</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/></div>
-        <div className="gr2">
-          <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
-          <div className="fg"><label>{t.rent} €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
-        </div>
-        <hr/>
-        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas</div>
-        <div className="gr2">
-          <div className="fg"><label>{t.signDate}</label>
-            <div style={{display:"flex",gap:4}}>
-              <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
-              <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
-              <input style={{width:52}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
-            </div>
-          </div>
-          <div className="fg"><label>{t.startDate}</label>
-            <div style={{display:"flex",gap:4}}>
-              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
-              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
-              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
-            </div>
-          </div>
-        </div>
-        <div className="fg"><label>{t.endDate}</label>
-          <div style={{display:"flex",gap:4}}>
-            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)}/>
-            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)}/>
-            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
-          </div>
-        </div>
-        <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.unit||!form.tenantName||!form.rent}>
-          Siguiente → Firma ›
-        </button>
-      </>}
-
-      {step===2&&<>
-        <div className="modal-hd"><h3>✍️ {t.tenantSignature}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(2,3)}
-        <div style={{background:"var(--cream)",borderRadius:12,padding:16,marginBottom:16,fontSize:13,lineHeight:1.8,maxHeight:200,overflowY:"auto"}}>
-          <p style={{fontWeight:700,textAlign:"center",marginBottom:10,fontSize:14}}>CONTRATO DE ARRENDAMIENTO — {form.unit.toUpperCase()}</p>
-          <p>📍 Calafell, <strong>{form.signDay} de {form.signMonth} de {form.signYear}</strong></p>
-          <p>👤 <strong>Arrendador:</strong> Joana Solé Santacana · DNI 39618190T</p>
-          <p>👤 <strong>Arrendatario:</strong> {form.tenantName} · DNI {form.tenantDni}</p>
-          <p>📅 <strong>Periodo:</strong> {form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</p>
-          <p>💶 <strong>Renta:</strong> {form.rent} €/mes · IPC + 1,5% anual</p>
-        </div>
-        <SignaturePad name={form.tenantName} onSign={(sig)=>{setTenantSigned(!!sig);set("signatureData",sig);}}/>
-        <div style={{display:"flex",gap:8,marginTop:12}}>
-          <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
-          <button className="btn btn-p" style={{flex:1}} onClick={handleSign} disabled={!tenantSigned||saving}>
-            {saving?"⏳ Guardando...":"✅ Firmar y guardar"}
-          </button>
-        </div>
-      </>}
-
-      {step===3&&<>
-        <div className="modal-hd"><h3>✅ Contrato guardado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(3,3)}
-        <div style={{textAlign:"center",padding:"16px 0"}}>
-          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
-          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:6}}>¡Contrato firmado!</h3>
-          <p style={{color:"var(--warm)",fontSize:13,marginBottom:18}}>Guardado en <strong>Contratos</strong>. El inquilino ya tiene acceso a la app.</p>
-          <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:18,textAlign:"left",fontSize:13}}>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Piso</span><strong>{form.unit}</strong></div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.tenantName}</strong></div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
-          </div>
-          <div style={{display:"flex",gap:8,justifyContent:"center"}}>
-            <button className="btn btn-p" onClick={()=>generateContractDocx(savedData||form)}>📥 Descargar PDF</button>
-            <button className="btn btn-o" onClick={onClose}>Cerrar</button>
-          </div>
-        </div>
-      </>}
-    </div>
-  );
-}
-// ─── GENERATE INVOICE PDF ────────────────────────────────────────────
-function generateInvoicePDF(inv){
-  const pdf=new jsPDF({ format:"a4", unit:"mm" });
-  const W=210,M=20;
-  let y=20;
-  const line=()=>{pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=6;};
-  const row=(label,val,bold=false)=>{
-    pdf.setFontSize(10);
-    pdf.setFont("helvetica",bold?"bold":"normal");
-    pdf.text(label,M,y);
-    pdf.setFont("helvetica","bold");
-    pdf.text(String(val),W-M,y,{align:"right"});
-    pdf.setFont("helvetica","normal");
-    y+=7;
-  };
-
-  // Header
-  pdf.setFillColor(42,36,32);pdf.rect(0,0,W,38,"F");
-  pdf.setTextColor(255,255,255);pdf.setFontSize(22);pdf.setFont("helvetica","bold");
-  pdf.text("FACTURA",M,16);
-  pdf.setFontSize(10);pdf.setFont("helvetica","normal");
-  pdf.text(`Nº ${inv.invoiceNum}/${inv.year}`,M,24);
-  pdf.text(`Fecha: ${inv.date}`,M,30);
-  pdf.setTextColor(0,0,0);y=48;
-
-  // Emisor
-  pdf.setFontSize(9);pdf.setFont("helvetica","bold");pdf.text("EMISOR",M,y);y+=5;
-  pdf.setFont("helvetica","normal");
-  ["JOANA SOLÉ SANTACANA","VIUDA DE JOAN SUAU OLIVELLA","PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª","43820 CALAFELL","DNI: 39618190T","bertasuau@gmail.com · 630 879 206"].forEach(l=>{pdf.text(l,M,y);y+=4.5;});
-  y+=4;
-
-  // Cliente
-  pdf.setFont("helvetica","bold");pdf.text("FACTURAR A",M,y);y+=5;
-  pdf.setFont("helvetica","normal");
-  if(inv.clientName)pdf.text(inv.clientName,M,y),y+=4.5;
-  if(inv.clientNif)pdf.text(`NIF: ${inv.clientNif}`,M,y),y+=4.5;
-  if(inv.clientAddress)pdf.text(inv.clientAddress,M,y),y+=4.5;
-  if(inv.clientEmail)pdf.text(inv.clientEmail,M,y),y+=4.5;
-  y+=6;line();
-
-  // Concepto
-  pdf.setFillColor(245,240,235);pdf.rect(M,y-2,W-M*2,8,"F");
-  pdf.setFont("helvetica","bold");pdf.setFontSize(10);
-  pdf.text("DESCRIPCIÓN",M+2,y+4);pdf.text("IMPORTE",W-M-2,y+4,{align:"right"});
-  y+=12;pdf.setFont("helvetica","normal");
-  pdf.text(inv.concept||"Alquiler",M,y);
-  pdf.text(`€${parseFloat(inv.base).toFixed(2)}`,W-M,y,{align:"right"});
-  y+=10;line();
-
-  // Totals
-  const base=parseFloat(inv.base)||0;
-  const iva=base*0.21;
-  const irpf=base*0.19;
-  const total=base+iva-irpf;
-  row("SUBTOTAL",`€${base.toFixed(2)}`);
-  row("IVA 21%",`€${iva.toFixed(2)}`);
-  row("SUBTOTAL CON IVA",`€${(base+iva).toFixed(2)}`,true);
-  row("IRPF 19%",`-€${irpf.toFixed(2)}`);
-  y+=2;pdf.setFillColor(42,36,32);pdf.rect(M,y-4,W-M*2,12,"F");
-  pdf.setTextColor(255,255,255);pdf.setFont("helvetica","bold");pdf.setFontSize(12);
-  pdf.text("TOTAL",M+4,y+4);
-  pdf.text(`€${total.toFixed(2)}`,W-M-4,y+4,{align:"right"});
-  pdf.setTextColor(0,0,0);y+=18;
-
-  // Footer
-  pdf.setFontSize(9);pdf.setFont("helvetica","normal");
-  pdf.text("Gracias por hacer negocios con nosotros.",M,y);y+=5;
-  pdf.text("Contacto: Berta Suau · +34 630 879 206 · bertasuau@gmail.com",M,y);y+=5;
-  pdf.text("GIRO CUENTA: ES95 0049 2720 4126 1406 7889",M,y);
-
-  pdf.save(`Factura_${inv.invoiceNum}_${inv.year}_${inv.clientName||""}.pdf`);
-}
-
-// ─── GENERATE RECEIPT PDF ────────────────────────────────────────────
-function generateReceiptPDF(rec){
-  const pdf=new jsPDF({ format:"a4", unit:"mm" });
-  const W=210,M=20;
-  let y=20;
-
-  pdf.setFillColor(42,36,32);pdf.rect(0,0,W,38,"F");
-  pdf.setTextColor(255,255,255);pdf.setFontSize(22);pdf.setFont("helvetica","bold");
-  pdf.text("RECIBO",M,16);
-  pdf.setFontSize(10);pdf.setFont("helvetica","normal");
-  pdf.text(`Nº ${rec.receiptNum}/${rec.year}`,M,24);
-  pdf.text(`Fecha: ${rec.date}`,M,30);
-  pdf.setTextColor(0,0,0);y=48;
-
-  pdf.setFontSize(9);pdf.setFont("helvetica","bold");pdf.text("ARRENDADOR",M,y);y+=5;
-  pdf.setFont("helvetica","normal");
-  ["JOANA SOLÉ SANTACANA","DNI: 39618190T","PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª, 43820 CALAFELL"].forEach(l=>{pdf.text(l,M,y);y+=4.5;});
-  y+=6;
-  pdf.setFont("helvetica","bold");pdf.text("ARRENDATARIO",M,y);y+=5;
-  pdf.setFont("helvetica","normal");
-  if(rec.clientName)pdf.text(rec.clientName,M,y),y+=4.5;
-  if(rec.clientDni)pdf.text(`DNI/NIE: ${rec.clientDni}`,M,y),y+=4.5;
-  y+=6;
-
-  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=8;
-  pdf.setFontSize(10);pdf.setFont("helvetica","bold");pdf.text("CONCEPTO",M,y);y+=6;
-  pdf.setFont("helvetica","normal");pdf.text(rec.concept||"Alquiler mensual",M,y);y+=10;
-  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=8;
-
-  pdf.setFillColor(42,36,32);pdf.rect(M,y-4,W-M*2,14,"F");
-  pdf.setTextColor(255,255,255);pdf.setFont("helvetica","bold");pdf.setFontSize(14);
-  pdf.text("IMPORTE TOTAL",M+4,y+5);
-  pdf.text(`€${parseFloat(rec.amount).toFixed(2)}`,W-M-4,y+5,{align:"right"});
-  pdf.setTextColor(0,0,0);y+=22;
-
-  pdf.setFontSize(9);pdf.setFont("helvetica","normal");
-  pdf.text("He recibido de la parte arrendataria la cantidad indicada en concepto de renta.",M,y);y+=5;
-  pdf.text("GIRO CUENTA: ES95 0049 2720 4126 1406 7889",M,y);y+=12;
-  pdf.text("Firma arrendador: _______________________",M,y);
-
-  pdf.save(`Recibo_${rec.receiptNum}_${rec.year}_${rec.clientName||""}.pdf`);
-}
-
-// ─── INVOICES PAGE ────────────────────────────────────────────────────
-function InvoicesPage({t,tenants,invoices,onNew,onDelete}){
-  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
-  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
-  const [openTenant,setOpenTenant]=useState(null);
-
-  // Group invoices by tenantId
-  const invByTenant={};
-  invoices.forEach(inv=>{(invByTenant[inv.tenantId]=invByTenant[inv.tenantId]||[]).push(inv);});
-
-  // Group tenants by building
-  const groups={};
-  buildings.forEach(b=>groups[b]=[]);
-  groups["Sin nave"]=[];
-  tenants.forEach(ten=>{
-    if(ten.docType==="recibo")return; // skip recibo-only
-    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave";
-    groups[b].push(ten);
-  });
-  const allGroups=[...buildings,"Sin nave"].filter(b=>groups[b].length>0);
-
-  return(
-    <div>
-      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-        <div><h2>🧾 Facturas</h2><p>{invoices.length} facturas guardadas</p></div>
-      </div>
-      {allGroups.map(building=>(
-        <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
-          <div style={{background:getBuildingColor(building),color:"white",padding:"10px 16px",fontFamily:"'DM Serif Display',serif",fontSize:15}}>
-            🏢 {building}
-          </div>
-          {groups[building].map(ten=>{
-            const invs=invByTenant[ten.id]||[];
-            const isOpen=openTenant===ten.id;
-            return(
-              <div key={ten.id} style={{borderBottom:"1px solid var(--border)"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",cursor:"pointer",background:"white"}} onClick={()=>setOpenTenant(isOpen?null:ten.id)}>
-                  <div style={{display:"flex",alignItems:"center",gap:10}}>
-                    <div className="av av-sm" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
-                    <div>
-                      <div style={{fontWeight:600,fontSize:14}}>{ten.name}</div>
-                      <div style={{fontSize:11,color:"var(--warm)"}}>{ten.unit} · {invs.length} facturas</div>
-                    </div>
-                  </div>
-                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                    <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();onNew(ten.id);}}>➕ Nueva factura</button>
-                    <span style={{fontSize:16}}>{isOpen?"▲":"▼"}</span>
-                  </div>
-                </div>
-                {isOpen&&(
-                  <div style={{background:"var(--cream)",padding:"8px 16px"}}>
-                    {invs.length===0
-                      ?<p style={{fontSize:13,color:"var(--warm)",padding:"8px 0"}}>No hay facturas aún</p>
-                      :invs.sort((a,b)=>b.invoiceNum-a.invoiceNum).map(inv=>(
-                        <div key={inv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
-                          <div>
-                            <div style={{fontWeight:600,fontSize:13}}>Factura {inv.invoiceNum}/{inv.year} · {inv.date}</div>
-                            <div style={{fontSize:11,color:"var(--warm)"}}>{inv.concept} · Base: {inv.base}€ · Total: {(parseFloat(inv.base)*(1+0.21-0.19)).toFixed(2)}€</div>
-                          </div>
-                          <div style={{display:"flex",gap:6}}>
-                            <button className="btn btn-o btn-sm" onClick={()=>generateInvoicePDF(inv)}>📥</button>
-                            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar factura?"))onDelete(inv.id);}}>🗑️</button>
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ))}
-      {allGroups.length===0&&<div className="card"><p style={{textAlign:"center",color:"var(--warm)",padding:20}}>No hay inquilinos con factura</p></div>}
-    </div>
-  );
-}
-
-// ─── RECEIPTS PAGE ────────────────────────────────────────────────────
-function ReceiptsPage({t,tenants,receipts,onNew,onDelete}){
-  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
-  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
-  const [openTenant,setOpenTenant]=useState(null);
-  const recByTenant={};
-  receipts.forEach(rec=>{(recByTenant[rec.tenantId]=recByTenant[rec.tenantId]||[]).push(rec);});
-  const groups={};
-  buildings.forEach(b=>groups[b]=[]);
-  groups["Sin nave"]=[];
-  tenants.forEach(ten=>{
-    if(ten.docType==="factura")return;
-    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave";
-    groups[b].push(ten);
-  });
-  const allGroups=[...buildings,"Sin nave"].filter(b=>groups[b].length>0);
-
-  return(
-    <div>
-      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-        <div><h2>🖨️ Recibos</h2><p>{receipts.length} recibos guardados</p></div>
-      </div>
-      {allGroups.map(building=>(
-        <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
-          <div style={{background:getBuildingColor(building),color:"white",padding:"10px 16px",fontFamily:"'DM Serif Display',serif",fontSize:15}}>
-            🏢 {building}
-          </div>
-          {groups[building].map(ten=>{
-            const recs=recByTenant[ten.id]||[];
-            const isOpen=openTenant===ten.id;
-            return(
-              <div key={ten.id} style={{borderBottom:"1px solid var(--border)"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",cursor:"pointer",background:"white"}} onClick={()=>setOpenTenant(isOpen?null:ten.id)}>
-                  <div style={{display:"flex",alignItems:"center",gap:10}}>
-                    <div className="av av-sm" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
-                    <div>
-                      <div style={{fontWeight:600,fontSize:14}}>{ten.name}</div>
-                      <div style={{fontSize:11,color:"var(--warm)"}}>{ten.unit} · {recs.length} recibos</div>
-                    </div>
-                  </div>
-                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                    <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();onNew(ten.id);}}>➕ Nuevo recibo</button>
-                    <span style={{fontSize:16}}>{isOpen?"▲":"▼"}</span>
-                  </div>
-                </div>
-                {isOpen&&(
-                  <div style={{background:"var(--cream)",padding:"8px 16px"}}>
-                    {recs.length===0
-                      ?<p style={{fontSize:13,color:"var(--warm)",padding:"8px 0"}}>No hay recibos aún</p>
-                      :recs.sort((a,b)=>b.receiptNum-a.receiptNum).map(rec=>(
-                        <div key={rec.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
-                          <div>
-                            <div style={{fontWeight:600,fontSize:13}}>Recibo {rec.receiptNum}/{rec.year} · {rec.date}</div>
-                            <div style={{fontSize:11,color:"var(--warm)"}}>{rec.concept} · {rec.amount}€</div>
-                          </div>
-                          <div style={{display:"flex",gap:6}}>
-                            <button className="btn btn-o btn-sm" onClick={()=>generateReceiptPDF(rec)}>📥</button>
-                            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar recibo?"))onDelete(rec.id);}}>🗑️</button>
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─── NEW INVOICE MODAL ────────────────────────────────────────────────
-function NewInvoiceModal({t,tenant,invoices,onClose,onSave}){
-  const now=new Date();
-  const year=now.getFullYear();
-  // Next invoice number: max existing + 1, starting from 7
-  const allNums=invoices.filter(i=>i.year===year).map(i=>i.invoiceNum);
-  const nextNum=allNums.length>0?Math.max(...allNums)+1:7;
-  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-
-  const [form,setForm]=useState({
-    invoiceNum:nextNum,year,
-    date:`${now.getDate()}/${now.getMonth()+1}/${year}`,
-    concept:`Alquiler ${tenant?.unit||""} ${monthNames[now.getMonth()]} ${year}`,
-    base:tenant?.rentFactura||tenant?.rent||"",
-    clientName:tenant?.name||"",clientNif:"",clientAddress:"",clientEmail:tenant?.email||""
-  });
-  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-  const base=parseFloat(form.base)||0;
-  const iva=base*0.21;
-  const irpf=base*0.19;
-  const total=base+iva-irpf;
-
-  const handleSave=async()=>{
-    await onSave({...form,tenantId:tenant.id,tenantName:tenant.name,invoiceNum:parseInt(form.invoiceNum)});
-    generateInvoicePDF({...form,tenantId:tenant.id,invoiceNum:parseInt(form.invoiceNum)});
-    onClose();
-  };
-
-  return(
-    <div className="modal" style={{maxWidth:520}}>
-      <div className="modal-hd"><h3>🧾 Nueva Factura</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-      <div className="gr2">
-        <div className="fg"><label>Nº Factura</label><input type="number" value={form.invoiceNum} onChange={e=>set("invoiceNum",e.target.value)}/></div>
-        <div className="fg"><label>Fecha</label><input value={form.date} onChange={e=>set("date",e.target.value)}/></div>
-      </div>
-      <div className="fg"><label>Concepto</label><input value={form.concept} onChange={e=>set("concept",e.target.value)}/></div>
-      <div className="fg"><label>Base imponible €</label><input type="number" value={form.base} onChange={e=>set("base",e.target.value)}/></div>
-      {base>0&&(
-        <div style={{background:"var(--cream)",borderRadius:10,padding:12,marginBottom:12,fontSize:13}}>
-          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>Subtotal</span><span>€{base.toFixed(2)}</span></div>
-          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>IVA 21%</span><span>€{iva.toFixed(2)}</span></div>
-          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>IRPF 19%</span><span>-€{irpf.toFixed(2)}</span></div>
-          <div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderTop:"2px solid var(--border)",fontWeight:700,marginTop:4}}><span>TOTAL</span><span>€{total.toFixed(2)}</span></div>
-        </div>
-      )}
-      <hr/>
-      <div style={{fontSize:12,fontWeight:600,color:"var(--warm)",marginBottom:8,textTransform:"uppercase"}}>Datos del cliente</div>
-      <div className="gr2">
-        <div className="fg"><label>Nombre / Empresa</label><input value={form.clientName} onChange={e=>set("clientName",e.target.value)}/></div>
-        <div className="fg"><label>NIF / DNI</label><input value={form.clientNif} onChange={e=>set("clientNif",e.target.value)}/></div>
-      </div>
-      <div className="fg"><label>Dirección</label><input value={form.clientAddress} onChange={e=>set("clientAddress",e.target.value)}/></div>
-      <div className="fg"><label>Email</label><input value={form.clientEmail} onChange={e=>set("clientEmail",e.target.value)}/></div>
-      <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.base||!form.clientName}>
-        💾 Guardar y descargar PDF
-      </button>
-    </div>
-  );
-}
-
-// ─── NEW RECEIPT MODAL ────────────────────────────────────────────────
-function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
-  const now=new Date();
-  const year=now.getFullYear();
-  const allNums=receipts.filter(r=>r.year===year).map(r=>r.receiptNum);
-  const nextNum=allNums.length>0?Math.max(...allNums)+1:1;
-  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-
-  const [form,setForm]=useState({
-    receiptNum:nextNum,year,
-    date:`${now.getDate()}/${now.getMonth()+1}/${year}`,
-    concept:`Alquiler ${tenant?.unit||""} ${monthNames[now.getMonth()]} ${year}`,
-    amount:tenant?.rentRecibo||tenant?.rent||"",
-    clientName:tenant?.name||"",clientDni:tenant?.dni||""
-  });
-  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-
-  const handleSave=async()=>{
-    await onSave({...form,tenantId:tenant.id,tenantName:tenant.name,receiptNum:parseInt(form.receiptNum)});
-    generateReceiptPDF({...form,tenantId:tenant.id,receiptNum:parseInt(form.receiptNum)});
-    onClose();
-  };
-
-  return(
-    <div className="modal" style={{maxWidth:480}}>
-      <div className="modal-hd"><h3>🖨️ Nuevo Recibo</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-      <div className="gr2">
-        <div className="fg"><label>Nº Recibo</label><input type="number" value={form.receiptNum} onChange={e=>set("receiptNum",e.target.value)}/></div>
-        <div className="fg"><label>Fecha</label><input value={form.date} onChange={e=>set("date",e.target.value)}/></div>
-      </div>
-      <div className="fg"><label>Concepto</label><input value={form.concept} onChange={e=>set("concept",e.target.value)}/></div>
-      <div className="fg"><label>Importe €</label><input type="number" value={form.amount} onChange={e=>set("amount",e.target.value)}/></div>
-      <hr/>
-      <div className="gr2">
-        <div className="fg"><label>Nombre inquilino</label><input value={form.clientName} onChange={e=>set("clientName",e.target.value)}/></div>
-        <div className="fg"><label>DNI / NIE</label><input value={form.clientDni} onChange={e=>set("clientDni",e.target.value)}/></div>
-      </div>
-      <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.amount||!form.clientName}>
-        💾 Guardar y descargar PDF
-      </button>
-    </div>
-  );
-}
-
-function AssignTenantModal({unit,buildings,onClose,onSave}){
-  const [step,setStep]=useState(1); // 1=tenant data, 2=contract, 3=confirm
-  const [saving,setSaving]=useState(false);
-  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-  const now=new Date();
-  const today=`${now.getDate().toString().padStart(2,"0")}/${(now.getMonth()+1).toString().padStart(2,"0")}/${now.getFullYear()}`;
-
-  const [tenant,setTenant]=useState({
-    name:"",phone:"",email:"",rent:"",docType:"recibo",payFreq:"mensual",
-    ipcEnabled:"si",fianza:"no",fianzaAmount:"",notes:"",
-    contractStart:now.toISOString().split("T")[0],
-    contractEnd:"",rentRecibo:"",rentFactura:""
-  });
-  const [contract,setContract]=useState({
-    addContract:true,
-    signDay:String(now.getDate()),signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
-    startDay:"1",startMonth:monthNames[now.getMonth()],startYear:String(now.getFullYear()),
-    endDay:"",endMonth:"",endYear:"",
-  });
-  const setT=(k,v)=>setTenant(t=>({...t,[k]:v}));
-  const setC=(k,v)=>setContract(c=>({...c,[k]:v}));
-
-  const handleSave=async()=>{
-    setSaving(true);
-    const contractData=contract.addContract?{
-      ...contract, unit:unit.name, tenantName:tenant.name,
-      rent:tenant.rent, tenantDni:"", tenantAddress:""
-    }:null;
-    await onSave({...tenant,building:unit.building},contractData);
-    setSaving(false);
-  };
-
-  return(
-    <div className="modal" style={{maxWidth:500}}>
-      <div className="modal-hd">
-        <h3>➕ Asignar inquilino · {unit.name}</h3>
-        <button className="close-btn" onClick={onClose}>✕</button>
-      </div>
-
-      {/* Progress */}
-      <div style={{display:"flex",gap:4,marginBottom:16}}>
-        {[1,2,3].map(s=>(
-          <div key={s} style={{flex:1,height:4,borderRadius:4,background:step>=s?"var(--terra)":"var(--border)"}}/>
-        ))}
-      </div>
-
-      {step===1&&<>
-        <div style={{fontSize:12,color:"var(--warm)",marginBottom:12,fontWeight:600,textTransform:"uppercase"}}>Datos del inquilino</div>
-        <div className="fg"><label>Nombre *</label><input value={tenant.name} onChange={e=>setT("name",e.target.value)}/></div>
-        <div className="gr2">
-          <div className="fg"><label>Teléfono</label><input value={tenant.phone} onChange={e=>setT("phone",e.target.value)}/></div>
-          <div className="fg"><label>Email</label><input value={tenant.email} onChange={e=>setT("email",e.target.value)}/></div>
-        </div>
-        <div className="fg"><label>Alquiler €/mes *</label><input type="number" value={tenant.rent} onChange={e=>setT("rent",e.target.value)}/></div>
-        <div className="fg">
-          <label>🧾 Tipo documento</label>
-          <div style={{display:"flex",gap:8,marginTop:6}}>
-            {["recibo","factura","ambos"].map(d=><button key={d} className={`btn btn-sm ${tenant.docType===d?"btn-p":"btn-o"}`} onClick={()=>setT("docType",d)}>{d.charAt(0).toUpperCase()+d.slice(1)}</button>)}
-          </div>
-        </div>
-        {tenant.docType==="ambos"&&<div className="gr2">
-          <div className="fg"><label>Importe Recibo €</label><input type="number" value={tenant.rentRecibo} onChange={e=>setT("rentRecibo",e.target.value)}/></div>
-          <div className="fg"><label>Importe Factura €</label><input type="number" value={tenant.rentFactura} onChange={e=>setT("rentFactura",e.target.value)}/></div>
-        </div>}
-        <div className="fg">
-          <label>📅 Frecuencia pago</label>
-          <select value={tenant.payFreq} onChange={e=>setT("payFreq",e.target.value)}>
-            {["mensual","2meses","3meses","4meses","6meses"].map(f=><option key={f} value={f}>{f==="mensual"?"Mensual":"Cada "+f.replace("meses"," meses")}</option>)}
-          </select>
-        </div>
-        <div className="gr2">
-          <div className="fg"><label>Inicio contrato</label><input type="date" value={tenant.contractStart} onChange={e=>setT("contractStart",e.target.value)}/></div>
-          <div className="fg"><label>Fin contrato</label><input type="date" value={tenant.contractEnd} onChange={e=>setT("contractEnd",e.target.value)}/></div>
-        </div>
-        <div className="fg">
-          <label>📈 IPC anual</label>
-          <div style={{display:"flex",gap:8,marginTop:6}}>
-            <button className={`btn btn-sm ${tenant.ipcEnabled==="si"?"btn-p":"btn-o"}`} onClick={()=>setT("ipcEnabled","si")}>✅ Sí</button>
-            <button className={`btn btn-sm ${tenant.ipcEnabled==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>setT("ipcEnabled","no")}>❌ No</button>
-          </div>
-        </div>
-        <div className="fg">
-          <label>🔒 Fianza</label>
-          <div style={{display:"flex",gap:8,marginTop:6}}>
-            <button className={`btn btn-sm ${tenant.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>setT("fianza","si")}>✅ Sí</button>
-            <button className={`btn btn-sm ${tenant.fianza==="no"?"btn-o":"btn-o"}`} onClick={()=>setT("fianza","no")}>❌ No</button>
-          </div>
-          {tenant.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe €" value={tenant.fianzaAmount} onChange={e=>setT("fianzaAmount",e.target.value)}/>}
-        </div>
-        <div className="fg"><label>📝 Notas</label><textarea value={tenant.notes} onChange={e=>setT("notes",e.target.value)} rows={2} style={{width:"100%",padding:"8px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/></div>
-        <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!tenant.name||!tenant.rent}>Siguiente →</button>
-      </>}
-
-      {step===2&&<>
-        <div style={{fontSize:12,color:"var(--warm)",marginBottom:12,fontWeight:600,textTransform:"uppercase"}}>¿Crear contrato?</div>
-        <div style={{display:"flex",gap:8,marginBottom:16}}>
-          <button className={`btn btn-sm ${contract.addContract?"btn-p":"btn-o"}`} onClick={()=>setC("addContract",true)}>📝 Sí, crear contrato</button>
-          <button className={`btn btn-sm ${!contract.addContract?"btn-s":"btn-o"}`} onClick={()=>setC("addContract",false)}>Sin contrato por ahora</button>
-        </div>
-        {contract.addContract&&<>
-          <div style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Fecha firma</div>
-          <div className="gr2" style={{marginBottom:8}}>
-            <div className="fg"><label>Día</label><input value={contract.signDay} onChange={e=>setC("signDay",e.target.value)}/></div>
-            <div className="fg"><label>Mes</label>
-              <select value={contract.signMonth} onChange={e=>setC("signMonth",e.target.value)}>
-                {["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"].map(m=><option key={m} value={m}>{m}</option>)}
-              </select>
-            </div>
-          </div>
-          <div style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Inicio contrato</div>
-          <div className="gr2" style={{marginBottom:8}}>
-            <div className="fg"><label>Día</label><input value={contract.startDay} onChange={e=>setC("startDay",e.target.value)}/></div>
-            <div className="fg"><label>Mes</label>
-              <select value={contract.startMonth} onChange={e=>setC("startMonth",e.target.value)}>
-                {["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"].map(m=><option key={m} value={m}>{m}</option>)}
-              </select>
-            </div>
-          </div>
-          <div style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Fin contrato</div>
-          <div className="gr2">
-            <div className="fg"><label>Día</label><input value={contract.endDay} onChange={e=>setC("endDay",e.target.value)}/></div>
-            <div className="fg"><label>Mes</label>
-              <select value={contract.endMonth} onChange={e=>setC("endMonth",e.target.value)}>
-                {["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"].map(m=><option key={m} value={m}>{m}</option>)}
-              </select>
-            </div>
-          </div>
-          <div className="fg"><label>Año fin</label><input value={contract.endYear} onChange={e=>setC("endYear",e.target.value)} placeholder={String(new Date().getFullYear()+1)}/></div>
-        </>}
-        <div style={{display:"flex",gap:8,marginTop:8}}>
-          <button className="btn btn-o" onClick={()=>setStep(1)}>← Atrás</button>
-          <button className="btn btn-p btn-full" onClick={()=>setStep(3)}>Siguiente →</button>
-        </div>
-      </>}
-
-      {step===3&&<>
-        <div style={{fontSize:12,color:"var(--warm)",marginBottom:12,fontWeight:600,textTransform:"uppercase"}}>Confirmar</div>
-        <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:16,fontSize:13}}>
-          <div style={{fontWeight:700,fontSize:15,marginBottom:8}}>{tenant.name}</div>
-          <div style={{color:"var(--warm)"}}>📦 {unit.name} · {unit.building}</div>
-          <div style={{color:"var(--warm)"}}>💶 {tenant.rent}€/mes · {tenant.docType} · {tenant.payFreq}</div>
-          {tenant.ipcEnabled==="si"&&<div style={{color:"var(--warm)"}}>📈 IPC activado</div>}
-          {tenant.fianza==="si"&&<div style={{color:"var(--warm)"}}>🔒 Fianza: {tenant.fianzaAmount}€</div>}
-          {contract.addContract&&<div style={{color:"var(--warm)",marginTop:4}}>📝 Contrato: {contract.startDay}/{contract.startMonth}/{contract.startYear||now.getFullYear()} → {contract.endDay}/{contract.endMonth}/{contract.endYear}</div>}
-        </div>
-        <div style={{display:"flex",gap:8}}>
-          <button className="btn btn-o" onClick={()=>setStep(2)}>← Atrás</button>
-          <button className="btn btn-p btn-full" onClick={handleSave} disabled={saving}>{saving?"Guardando...":"✅ Confirmar y asignar"}</button>
-        </div>
-      </>}
-    </div>
-  );
-}
-
-function ManageBuildingsModal({prop,onClose,onSave}){
-  const [buildings,setBuildings]=useState([...(prop?.buildings||[])]);
-  const [newBuilding,setNewBuilding]=useState("");
-
-  const add=()=>{
-    if(!newBuilding.trim())return;
-    setBuildings(b=>[...b,newBuilding.trim()]);
-    setNewBuilding("");
-  };
-  const remove=(i)=>setBuildings(b=>b.filter((_,j)=>j!==i));
-
-  return(
-    <div className="modal" style={{maxWidth:440}}>
-      <div className="modal-hd">
-        <h3>⚙️ Gestionar naves · {prop?.name}</h3>
-        <button className="close-btn" onClick={onClose}>✕</button>
-      </div>
-      <div style={{marginBottom:12}}>
-        {buildings.map((b,i)=>(
-          <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
-            <span style={{flex:1,fontSize:14}}>🏢 {b}</span>
-            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>remove(i)}>🗑️</button>
-          </div>
-        ))}
-        {buildings.length===0&&<p style={{fontSize:13,color:"var(--warm)"}}>No hay naves definidas</p>}
-      </div>
-      <div style={{display:"flex",gap:8,marginBottom:16}}>
-        <input
-          value={newBuilding}
-          onChange={e=>setNewBuilding(e.target.value)}
-          onKeyDown={e=>e.key==="Enter"&&add()}
-          placeholder="Nombre nave / edificio..."
-          style={{flex:1}}
-        />
-        <button className="btn btn-p" onClick={add} disabled={!newBuilding.trim()}>➕</button>
-      </div>
-      <button className="btn btn-p btn-full" onClick={()=>onSave(buildings)}>💾 Guardar cambios</button>
-    </div>
-  );
-}
-
-function TrasterosPage({tenants,units,buildings,propId,onSaveUnit,onDeleteUnit,onAssignTenant}){
-  const [adding,setAdding]=useState(false);
-  const [newUnit,setNewUnit]=useState({name:"",building:buildings[0]||""});
-  const getBuildingColor=(b,i)=>["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"][i%7];
-
-  // Group units by building
-  const allBuildings=[...new Set([...buildings,...units.map(u=>u.building)].filter(Boolean))];
-  const getOccupant=(unit)=>tenants.find(t=>t.unit===unit.name&&t.building===unit.building);
-
-  const totalFree=units.filter(u=>!getOccupant(u)).length;
-  const totalOccupied=units.filter(u=>!!getOccupant(u)).length;
-
-  const handleAdd=async()=>{
-    if(!newUnit.name.trim())return;
-    await onSaveUnit({...newUnit,propId,name:newUnit.name.trim()});
-    setNewUnit({name:"",building:buildings[0]||""});
-    setAdding(false);
-  };
-
-  return(
-    <div>
-      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-        <div>
-          <h2>📦 Trasteros</h2>
-          <p>{units.length} unidades · <span style={{color:"#4A9B6F",fontWeight:600}}>{totalOccupied} ocupadas</span> · <span style={{color:"#D94F3D",fontWeight:600}}>{totalFree} libres</span></p>
-        </div>
-        <button className="btn btn-p" onClick={()=>setAdding(v=>!v)}>➕ Añadir unidad</button>
-      </div>
-
-      {adding&&(
-        <div className="card" style={{marginBottom:16}}>
-          <div className="card-title">Nueva unidad</div>
-          <div className="gr2">
-            <div className="fg"><label>Nombre / Código</label>
-              <input value={newUnit.name} onChange={e=>setNewUnit(u=>({...u,name:e.target.value}))} placeholder="Ej: Trastero 7, Local 2..."/>
-            </div>
-            <div className="fg"><label>Nave</label>
-              <select value={newUnit.building} onChange={e=>setNewUnit(u=>({...u,building:e.target.value}))}>
-                {buildings.filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
-                <option value="">Sin nave</option>
-              </select>
-            </div>
-          </div>
-          <div style={{display:"flex",gap:8}}>
-            <button className="btn btn-o" onClick={()=>setAdding(false)}>Cancelar</button>
-            <button className="btn btn-p" onClick={handleAdd} disabled={!newUnit.name.trim()}>✅ Guardar</button>
-          </div>
-        </div>
-      )}
-
-      {allBuildings.length===0&&units.length===0&&(
-        <div className="card"><p style={{textAlign:"center",color:"var(--warm)",padding:20}}>No hay unidades definidas. Añade la primera.</p></div>
-      )}
-
-      {allBuildings.map((building,bi)=>{
-        const buildingUnits=units.filter(u=>u.building===building);
-        if(buildingUnits.length===0)return null;
-        const free=buildingUnits.filter(u=>!getOccupant(u)).length;
-        return(
-          <div key={building} style={{marginBottom:16,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
-            <div style={{background:getBuildingColor(building,bi),color:"white",padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {building}</div>
-              <div style={{fontSize:12,opacity:.85}}>{buildingUnits.length} unidades · {free} libre{free!==1?"s":""}</div>
-            </div>
-            <div style={{background:"white"}}>
-              {buildingUnits.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true})).map(unit=>{
-                const occupant=getOccupant(unit);
-                return(
-                  <div key={unit.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
-                    <div style={{width:10,height:10,borderRadius:"50%",background:occupant?"#D94F3D":"#4A9B6F",flexShrink:0}}/>
-                    <div style={{flex:1}}>
-                      <div style={{fontWeight:600,fontSize:14}}>{unit.name}</div>
-                      {occupant
-                        ?<div style={{fontSize:12,color:"var(--warm)",marginTop:2}}>
-                          👤 {occupant.name} · {occupant.rent}€/mes · hasta {occupant.contractEnd||"—"}
-                        </div>
-                        :<div style={{fontSize:12,color:"#4A9B6F",fontWeight:600,marginTop:2}}>🟢 Libre</div>
-                      }
-                    </div>
-                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                      {!occupant&&<span className="badge" style={{background:"#E6F4ED",color:"#4A9B6F",fontSize:11}}>LIBRE</span>}
-                      {occupant&&<span className="badge" style={{background:"#FDECEA",color:"#D94F3D",fontSize:11}}>OCUPADO</span>}
-                      {!occupant&&<button className="btn btn-p btn-sm" onClick={()=>onAssignTenant(unit)}>➕ Asignar</button>}
-                      <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar esta unidad?"))onDeleteUnit(unit.id);}}>🗑️</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
-
-      {/* Units without building */}
-      {units.filter(u=>!u.building).length>0&&(
-        <div style={{marginBottom:16,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
-          <div style={{background:"#8C7B6E",color:"white",padding:"12px 16px",fontFamily:"'DM Serif Display',serif",fontSize:16}}>Sin nave asignada</div>
-          <div style={{background:"white"}}>
-            {units.filter(u=>!u.building).map(unit=>{
-              const occupant=getOccupant(unit);
-              return(
-                <div key={unit.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
-                  <div style={{width:10,height:10,borderRadius:"50%",background:occupant?"#D94F3D":"#4A9B6F",flexShrink:0}}/>
-                  <div style={{flex:1}}>
-                    <div style={{fontWeight:600,fontSize:14}}>{unit.name}</div>
-                    {occupant?<div style={{fontSize:12,color:"var(--warm)",marginTop:2}}>👤 {occupant.name} · {occupant.rent}€/mes</div>:<div style={{fontSize:12,color:"#4A9B6F",fontWeight:600}}>🟢 Libre</div>}
-                  </div>
-                  <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar?"))onDeleteUnit(unit.id);}}>🗑️</button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RenewContractModal({tenant,onClose,onRenew}){
-  const [months,setMonths]=useState("12");
-  const [preview,setPreview]=useState(null);
-
-  const calcPreview=(m)=>{
-    const currentEnd=tenant?.contractEnd?new Date(tenant.contractEnd):new Date();
-    const newEnd=new Date(currentEnd);
-    newEnd.setMonth(newEnd.getMonth()+parseInt(m));
-    return newEnd.toISOString().split("T")[0];
-  };
-
-  const options=[
-    {value:"3",label:"3 meses"},
-    {value:"6",label:"6 meses"},
-    {value:"11",label:"11 meses"},
-    {value:"12",label:"1 año"},
-    {value:"24",label:"2 años"},
-    {value:"36",label:"3 años"},
-    {value:"48",label:"4 años"},
-    {value:"60",label:"5 años"},
-  ];
-
-  const newRent=tenant?.ipcEnabled==="si"?Math.round((tenant?.rent||0)*1.015*100)/100:tenant?.rent;
-  const newEnd=calcPreview(months);
-
-  return(
-    <div className="modal" style={{maxWidth:420}}>
-      <div className="modal-hd"><h3>🔄 Renovar contrato</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-      <div style={{background:"var(--cream)",borderRadius:10,padding:12,marginBottom:16,fontSize:13}}>
-        <div style={{fontWeight:600,marginBottom:4}}>{tenant?.name} · {tenant?.unit}</div>
-        <div style={{color:"var(--warm)"}}>Contrato actual hasta: <strong>{tenant?.contractEnd||"—"}</strong></div>
-      </div>
-      <div className="fg">
-        <label>⏱️ Renovar por</label>
-        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:8}}>
-          {options.map(o=>(
-            <button key={o.value} className={`btn btn-sm ${months===o.value?"btn-p":"btn-o"}`} onClick={()=>setMonths(o.value)}>
-              {o.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div style={{background:"var(--cream)",borderRadius:10,padding:14,marginTop:12}}>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,fontSize:13}}>
-          <span style={{color:"var(--warm)"}}>Nueva fecha fin</span>
-          <strong>{newEnd}</strong>
-        </div>
-        {tenant?.ipcEnabled==="si"&&(
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-            <span style={{color:"var(--warm)"}}>Nuevo alquiler (+IPC 1,5%)</span>
-            <strong style={{color:"var(--sage)"}}>{newRent}€/mes</strong>
-          </div>
-        )}
-        {tenant?.ipcEnabled!=="si"&&(
-          <div style={{fontSize:12,color:"var(--warm)"}}>Sin subida de IPC</div>
-        )}
-      </div>
-      <button className="btn btn-p btn-full" style={{marginTop:16}} onClick={()=>onRenew(months)}>
-        ✅ Confirmar renovación
-      </button>
     </div>
   );
 }
