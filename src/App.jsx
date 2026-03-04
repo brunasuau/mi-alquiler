@@ -940,4 +940,10 @@ function StatusBadge({status,t}){
   return<span className="badge" style={{background:s.bg,color:s.color}}>{s.label}</span>;
 }
 
-export default App;
+export default function App() {
+  return (
+    <div style={{ padding: 24 }}>
+      <h1>Mi Alquiler</h1>
+    </div>
+  );
+}
