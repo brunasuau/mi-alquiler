@@ -114,177 +114,2310 @@ function generateAnnualExcel(tenants, year) {
   return {year, filename:`MiAlquiler_Resumen_${year}.xlsx`, date:new Date().toLocaleDateString("es-ES"), totI, totG, totInv, profit:totI-totG-totInv};
 }
 
-function generateContractPDF(data) {
-  const { unit, building, tenantName, tenantDni, tenantAddress,
-          signDay, signMonth, signYear,
-          startDay, startMonth, startYear,
-          endDay, endMonth, endYear,
-          rent, durationText,
-          tenantSignature, ownerSignature } = data;
-
+function generateContractDocx(data) {
+  const { unit, tenantName, tenantDni, tenantAddress, signDay, signMonth, signYear,
+          startDay, startMonth, startYear, endDay, endMonth, endYear, rent } = data;
   const d = new jsPDF({ format:"a4", unit:"mm" });
   const lm=20, rm=190, maxW=rm-lm;
-  let y=25;
-  const lh=5.8;
+  let y=20;
+  const lh=6;
 
-  function checkPage(n=12){ if(y+n>282){d.addPage();y=20;} }
-  function sp(n=4){y+=n;}
-
-  // Render mixed bold/normal paragraph with word-wrap
-  function para(segs, extraAfter=3){
-    d.setFontSize(10);
-    // flatten to word tokens
-    let tokens=[];
-    segs.forEach(s=>{
-      const words=s.text.split(/( )/);
-      words.forEach(w=>{ if(w!=="")tokens.push({w,bold:!!s.bold}); });
-    });
-    let lines=[[]]; let lw=0;
-    tokens.forEach(tok=>{
-      d.setFont("helvetica",tok.bold?"bold":"normal");
-      const tw=d.getTextWidth(tok.w);
-      if(lw+tw>maxW && lines[lines.length-1].length>0){lines.push([]);lw=0;}
-      lines[lines.length-1].push(tok); lw+=tw;
+  function addText(segments, lineW=maxW) {
+    // segments: [{text, bold}]
+    let x=lm;
+    // Build lines by wrapping words
+    let lines=[[]]; // array of segments per line
+    segments.forEach(seg=>{
+      const words=seg.text.split(" ");
+      words.forEach((word,wi)=>{
+        const w=word+(wi<words.length-1?" ":"");
+        d.setFont("helvetica", seg.bold?"bold":"normal");
+        const ww=d.getTextWidth(w);
+        const lineW2=d.getTextWidth(lines[lines.length-1].map(s=>s.text).join(""));
+        if(lineW2+ww>lineW && lines[lines.length-1].length>0){
+          lines.push([{text:w,bold:seg.bold}]);
+        } else {
+          const last=lines[lines.length-1];
+          if(last.length>0&&last[last.length-1].bold===seg.bold){
+            last[last.length-1].text+=w;
+          } else {
+            last.push({text:w,bold:seg.bold});
+          }
+        }
+      });
     });
     lines.forEach(line=>{
-      checkPage();
+      if(y>280){d.addPage();y=20;}
       let cx=lm;
-      line.forEach(tok=>{
-        d.setFont("helvetica",tok.bold?"bold":"normal");
-        d.text(tok.w,cx,y); cx+=d.getTextWidth(tok.w);
+      line.forEach(seg=>{
+        d.setFont("helvetica",seg.bold?"bold":"normal");
+        d.setFontSize(10);
+        d.text(seg.text,cx,y);
+        cx+=d.getTextWidth(seg.text);
       });
       y+=lh;
     });
-    y+=extraAfter;
+    y+=2;
   }
 
-  function t(txt,bold=false){ return {text:txt,bold}; }
-
-  function title(txt){
-    checkPage(10);
+  function title(text){
+    if(y>270){d.addPage();y=20;}
     d.setFont("helvetica","bold"); d.setFontSize(13);
-    d.text(txt,105,y,{align:"center"}); y+=9; d.setFontSize(10);
+    d.text(text, 105, y, {align:"center"}); y+=8;
+    d.setFontSize(10);
   }
-  function clausula(label){
-    checkPage(8); sp(1);
+  function heading(text){
+    if(y>270){d.addPage();y=20;}
     d.setFont("helvetica","bold"); d.setFontSize(10);
-    d.text(label,lm,y); y+=lh+1;
+    d.text(text,lm,y); y+=lh+1;
   }
-  function seccion(label){
-    checkPage(8); sp(2);
-    d.setFont("helvetica","bold"); d.setFontSize(10);
-    d.text(label,lm,y); y+=lh+1;
-  }
+  function space(){y+=3;}
 
-  // ─── CABECERA ───────────────────────────────────────────
-  title("CONTRATO DE ALQUILER PARA USO DISTINTO A VIVIENDA");
-  sp(2);
-  para([t("En Calafell, a "),t(signDay+" de "+signMonth+" de "+signYear,true)]);
-  sp(2);
-
-  // ─── REUNIDOS ───────────────────────────────────────────
-  seccion("R E U N I D O S:");
-  para([t("De una parte, "),t("Joana Solé Santacana",true),t(", mayor de edad, con domicilio a estos efectos en el Passeig Marítim Sant Joan de Déu núm. 90, Esc. B, 5º 2ª de Calafell, provista de DNI número "),t("36618190T",true),t(".")]);
-  para([t("De otra, Sr/a. "),t(tenantName,true),t(", mayor de edad, con domicilio a estos efectos en "),t(tenantAddress,true),t(", provista de DNI número "),t(tenantDni,true),t(".")]);
-  para([t("Después de reconocerse mutua y recíprocamente la legal y precisa capacidad legal para obligar y obligarse cuanto en derecho fuera menester, haciéndolo libre y voluntariamente,")]);
-
-  // ─── MANIFIESTAN ────────────────────────────────────────
-  seccion("M A N I F I E S T A N:");
-  para([t("I.- Que Joana Solé Santacana por sus justos y legítimos títulos resulta ser titular del trastero número "),t(unit,true),t(" situado en la Nave Industrial "),t(building||"",true),t(" sita en C/ Pou, 61 Calafell (Tarragona).")]);
-  para([t("II.- Que, la arrendataria está interesada en el arrendamiento de dicho Trastero para almacenar en el mismo existencias y/o utensilios propios de su objeto social.")]);
-  para([t("Que, en virtud de lo referido, acuerdan formalizar el presente contrato por el que pactan las siguientes,")]);
-
-  // ─── CLÁUSULAS ──────────────────────────────────────────
-  seccion("C L Á U S U L A S:");
-
-  clausula("PRIMERA.-");
-  para([t("Joana Solé Santacana, en adelante, arrendadora, cede en arrendamiento a "),t(tenantName,true),t(", en adelante, la arrendataria, quien acepta, “EL TRASTERO”, sito en la calle Pou núm. 61 de Calafell, (Trastero núm. "),t(unit,true),t(" "),t(building||"",true),t("), cuya ubicación, lindes, características, estado de conservación, elementos y servicios comunes y privativos, manifiestan las partes conocer.")]);
-
-  clausula("SEGUNDA.-");
-  para([t("Las partes convienen en establecer la duración de este contrato de "),t(durationText,true),t(", en las condiciones que en el presente se estipulan. Finalizado el plazo establecido de duración del contrato la parte arrendataria deberá dejar libre y vacua la nave objeto de alquiler, sin necesidad de que la misma efectúe requerimiento ni notificación previa alguna; ello sin perjuicio de que las partes puedan con carácter previo, formalizar nuevo contrato de alquiler o prórroga expresa del presente.")]);
-  para([t("La parte arrendataria podrá renunciar libremente al contrato de alquiler, siempre que la renuncia se comunique de forma fehaciente por cualquier medio, con una antelación mínima de tres meses. El incumplimiento en el plazo de preaviso estipulado comportará el devengo de una indemnización a favor de la arrendadora equivalente al importe de la renta de alquiler por el plazo transcurrido entre el día en que se efectúa el preaviso y los citados tres meses.")]);
-  para([t("Con independencia de lo anterior, la rescisión unilateral anticipada por parte de la sociedad arrendataria comportará la pérdida de la fianza estipulada en el pacto quinto.")]);
-
-  clausula("TERCERA.-");
-  para([t("Con expresa renuncia por los contratantes a lo establecido en el artículo 34 de la L.A.U., se acuerda que la extinción del contrato por el transcurso del término convenido no dará derecho a la arrendataria a indemnización alguna a cargo de la arrendadora.")]);
-
-  clausula("CUARTA.-");
-  para([t("Las partes establecen una renta de alquiler de "),t(rent+" €",true),t(" mensuales. La renta se abonará de forma anticipada durante los cinco primeros días de cada una de las mensualidades en la cuenta núm. "),t("ES26 2100 0366 8502 0071 2257",true),t(", titular de la Sra. Joana Solé, de la parte arrendadora, o en la que la misma designe. Sin perjuicio de ello, de desear la arrendadora domiciliar los recibos, la parte arrendataria firmará la correspondiente autorización para el adeudo domiciliado B2B.")]);
-  para([t("La renta de alquiler será objeto de actualización anual según el Índice General de Precios al Consumo. La primera actualización se efectuará en "),t(signMonth,true),t(", conforme el IPC interanual al mes de diciembre, si bien podrá aplicarse provisionalmente el último índice publicado. La renta no será objeto de modificación en el supuesto de que dicho índice resultare negativo. La renta actualizada conforme se ha indicado, será exigible a partir del mes siguiente a aquel en que la parte arrendadora lo notifique a la arrendataria por escrito, expresando el porcentaje de alteración aplicado. En ningún caso la demora en aplicar la revisión supondrá renuncia o caducidad a la misma.")]);
-  para([t("Adicionalmente a la renta de alquiler pactada, y en tanto que no existen contadores de consumo individualizados, la parte arrendataria participará en los gastos de luz y agua de la nave en la que se encuentra el trastero objeto de arrendamiento, en la cantidad de "),t("2,5€",true),t(" mensuales.")]);
-
-  clausula("QUINTA.-");
-  para([t("No se establece ningún tipo de fianza.")]);
-
-  clausula("SEXTA.-");
-  para([t("Si finalizado el término de duración del presente contrato, o finado el mismo por cualquier causa, la parte arrendataria no deja libre el trastero a disposición de la propiedad, indemnizará a la arrendadora en la cantidad de "),t("10,00 €",true),t(" diarios; si el retraso en el desalojo fuere de dos meses o superior, la indemnización se fijará en "),t("20,00 €",true),t(" diarios. Dicha cantidad se considerará de carácter indemnizatorio y se adicionará a la renta del periodo de permanencia. Sin perjuicio de la posible reclamación por otros conceptos estipulados en el presente contrato y de mayor cuantía por daños y perjuicios derivados de la falta de desalojo, si fueren los mismos de superior cuantía.")]);
-  para([t("Al finalizar el contrato por cualquier causa, incluida la renuncia unilateral, la parte arrendataria deberá dejar el trastero libre y vacuo de elementos de su propiedad, a disposición de la parte arrendadora, entendiéndose que, de no hacerlo, se considerarán cedidos de forma gratuita a favor de la ahora arrendadora, quien por tanto podrá hacer uso libre de los mismos, incluso destruirlos.")]);
-
-  clausula("SÉPTIMA.-");
-  para([t("Serán a cuenta de la arrendataria todo tipo de impuestos, gravámenes y demás cargas fiscales, laborales, etc., que resultaren necesarios para la gestión y uso del trastero que se arrienda.")]);
-  para([t("De resultar preciso, será por cuenta y cargo de la arrendataria los trámites y tasas que devenguen por la legalización del trastero-almacén, licencias y demás autorizaciones administrativas, quedando indemne la propiedad de la total tramitación del expediente. A estos efectos se deja constancia de que en la fijación del precio pactado se ha tenido en cuenta el actual estado del inmueble.")]);
-
-  clausula("OCTAVA.-");
-  para([t("La arrendataria se hace directa y exclusivamente responsable, eximiendo de cualquier responsabilidad a la propiedad, de los daños que puedan ocasionarse a personas o cosas en el trastero arrendado, o que sean consecuencia de la actividad realizada en el mismo. Se compromete a contratar un Seguro que cubra durante la vigencia del contrato los riesgos básicos, daños materiales en contenido, robo y expoliación del contenido y responsabilidad civil.")]);
-
-  clausula("NOVENA.-");
-  para([t("Será de cuenta y cargo de la parte arrendadora el IBI y tasa de recogida de basuras; respecto a los suministros, de no proceder la parte arrendataria a efectuar y contratar instalación individualizada de los mismos, se estará a lo convenido en el pacto cuarto de este contrato.")]);
-
-  clausula("DÉCIMA.-");
-  para([t("Con expresa renuncia al art. 32 de la L.A.U., la arrendataria no podrá subarrendar, ni ceder, el local objeto del presente contrato, ni total, ni parcialmente, si no es con el consentimiento previo y por escrito de la arrendadora. Se considerará cesión no consentida cualquier transmisión de títulos que comporte la pérdida de titularidad real por parte de la arrendataria, ello salvo autorización expresa de la parte arrendadora.")]);
-
-  clausula("DÉCIMO-PRIMERA.-");
-  para([t("El trastero se arrienda en las condiciones en las que actualmente se encuentra y de las que resulta plenamente conocedora la parte arrendataria.")]);
-  para([t("La parte arrendataria no podrá efectuar obra alguna sin el consentimiento expreso escrito de la parte arrendadora, salvo aquellas propias del mantenimiento y reparación de las instalaciones o las que fueren exigidas por las autoridades para el desarrollo de la actividad, cuyo coste será, en todo caso, a cargo de la parte arrendataria.")]);
-  para([t("En el supuesto de que la parte arrendataria fuera requerida por administración pública a efectuar obras de adaptación del trastero, las mismas se llevarían a cabo de conformidad con la legislación vigente, siendo requisito la presentación del proyecto a la arrendadora a fin de que la misma autorice los aspectos de carácter estético inherentes a la obra.")]);
-  para([t("Resultaría asimismo necesaria la contratación de seguro a cargo de la arrendataria que cubriera cualquier riesgo inherente a las mismas. Finalizado el contrato por cualquier motivo, cualquier obra efectuada por la arrendataria en el local quedará en beneficio de la arrendadora de forma gratuita.")]);
-
-  clausula("DÉCIMO-SEGUNDA.-");
-  para([t("La arrendataria, por su propio interés, se compromete a conservar y cuidar el objeto arrendado con la diligencia de un ordenado comerciante, debiendo realizar por su cuenta y cargo las obras necesarias de conservación, reparación y reposición de todos los elementos arrendados, a fin de que se encuentren, al finalizar el presente contrato, en el mismo estado en que actualmente se hallan. Renuncia a los efectos indicados al art. 21 en relación con el 30 de la L.A.U.")]);
-
-  clausula("DÉCIMO-TERCERA.-");
-  para([t("La arrendataria se obliga a permitir el acceso al trastero arrendado a la arrendadora o a la persona u operarios que esta delegue, durante la vigencia del presente.")]);
-
-  clausula("DÉCIMO-CUARTA.-");
-  para([t("El trastero arrendado no puede, bajo ningún concepto, ser destinado a vivienda propia o de terceras personas, sean o no familiares o dependientes de la arrendataria, ya sea parcial o totalmente, ni a ningún otro uso que el especificado anteriormente, salvo autorización expresa por escrito de los propietarios.")]);
-
-  clausula("DÉCIMO-QUINTA.-");
-  para([t("Queda expresamente prohibido el almacenaje en el trastero de materias peligrosas o insalubres, así como realizar actividades ilegales, incluso el almacenaje de productos ilícitos, sea por resultar su tenencia prohibida, o su origen; todo ello será causa de rescisión automática del presente contrato; bastando para ello la apertura de juicio oral, o el procesamiento por cualquier autoridad judicial, ya sea contra la arrendataria, su administrador y/o contra la avaladora.")]);
-
-  clausula("DÉCIMO-SEXTA.-");
-  para([t("La arrendataria renuncia de forma expresa a la aplicación del art. 25, en relación al art. 31 de la L.A.U., renunciando a sus derechos a adquisición preferente, tanteo y retracto sobre el local arrendado.")]);
-
-  clausula("DÉCIMO-SÉPTIMA.-");
-  para([t("La arrendataria responde, conjunta y solidariamente, con renuncia al derecho de excusión, división y orden; respecto de todos y cada uno de los compromisos asumidos en el presente contrato y en especial del pago de la renta de alquiler.")]);
-
-  clausula("DÉCIMO-OCTAVA.-");
-  para([t("Para cualquier clase de duda respecto a la interpretación o cumplimiento del presente contrato, ambas partes, con renuncia expresa al fuero de su domicilio o cualquier otro si lo tuvieran, se someten expresamente a la jurisdicción y competencia de los Juzgados y Tribunales de El Vendrell.")]);
-
-  sp(4);
-  para([t("Y en prueba de conformidad, las partes afirmándose y ratificándose en el contenido de este contrato, lo firman por duplicado, con promesa de cumplirlo bien y fielmente, en el lugar y fecha indicados en el encabezamiento.")]);
-
-  // ─── FIRMAS ─────────────────────────────────────────────
-  checkPage(55); sp(8);
+  title(`CONTRATO DE ARRENDAMIENTO DE ${unit.toUpperCase()}`);
+  space();
+  addText([{text:`En Calafell, a ${signDay} de ${signMonth} de ${signYear}.`}]);
+  space();
+  heading("REUNIDOS");
+  addText([{text:"De una parte, D./Dña. "},{text:"JOANA SOLÉ SANTACANA",bold:true},{text:", mayor de edad, con DNI nº "},{text:"39618190T",bold:true},{text:", domicilio en "},{text:"PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª",bold:true},{text:", en adelante "},{text:"EL ARRENDADOR",bold:true},{text:"."}]);
+  addText([{text:"Y de otra parte, D./Dña. "},{text:tenantName,bold:true},{text:", DNI nº "},{text:tenantDni,bold:true},{text:", domicilio en "},{text:tenantAddress,bold:true},{text:", en adelante "},{text:"EL ARRENDATARIO",bold:true},{text:"."}]);
+  addText([{text:"Ambas partes se reconocen capacidad legal suficiente para formalizar el presente contrato."}]);
+  space();
+  heading("EXPONEN");
+  addText([{text:"1. El ARRENDADOR es propietario del local en "},{text:"Carrer Montserrat, nº 14, Calafell (Tarragona)",bold:true},{text:"."}]);
+  addText([{text:"2. Ambas partes desean renovar el arrendamiento bajo las siguientes condiciones."}]);
+  space();
+  heading("CLÁUSULAS");
+  heading("Primera. Objeto");
+  addText([{text:"El ARRENDADOR renueva el arrendamiento sobre el local en "},{text:"Carrer Montserrat, nº 14, Calafell",bold:true},{text:", uso comercial."}]);
+  heading("Segunda. Duración");
+  addText([{text:"Duración dos (2) años: del "},{text:`${startDay} de ${startMonth} de ${startYear}`,bold:true},{text:" al "},{text:`${endDay} de ${endMonth} de ${endYear}`,bold:true},{text:"."}]);
+  heading("Tercera. Renta");
+  addText([{text:"Renta mensual: "},{text:`${rent} €`,bold:true},{text:", abonada los cinco primeros días del mes por transferencia bancaria."}]);
+  heading("Cuarta. Actualización de la renta");
+  addText([{text:"Actualización anual según IPC + 1,5% adicional. Primera actualización a los 12 meses de la firma."}]);
+  heading("Quinta. Gastos y suministros");
+  addText([{text:"Electricidad, agua y basuras son a cargo exclusivo del ARRENDATARIO."}]);
+  heading("Sexta. Fianza");
+  addText([{text:"Al ser renovación, no se constituye fianza adicional."}]);
+  heading("Séptima. Conservación");
+  addText([{text:"El ARRENDATARIO mantendrá el local en perfecto estado. Reparaciones menores a su cargo."}]);
+  heading("Octava. Cesión y subarriendo");
+  addText([{text:"Prohibida la cesión y el subarriendo sin consentimiento escrito del ARRENDADOR."}]);
+  heading("Novena. Legislación");
+  addText([{text:"Se rige por el Código Civil y la Ley de Arrendamientos Urbanos vigente."}]);
+  space();
+  addText([{text:"Y en prueba de conformidad, firman el presente contrato por duplicado en el lugar y fecha indicados."}]);
+  y+=10;
+  if(y>250){d.addPage();y=20;}
   d.setFont("helvetica","bold"); d.setFontSize(10);
   d.text("EL ARRENDADOR",lm,y);
-  d.text("LA ARRENDATARIA",115,y);
-  y+=7;
-  d.setFont("helvetica","normal"); d.setFontSize(9);
-  d.text("Fdo.: Joana Solé Santacana",lm,y);
-  d.text("Fdo.: "+tenantName,115,y);
-  y+=5;
-
-  if(ownerSignature){ try{ d.addImage(ownerSignature,"PNG",lm,y,65,22); }catch(e){} }
-  else { d.setDrawColor(150); d.line(lm,y+20,lm+65,y+20); }
-
-  if(tenantSignature){ try{ d.addImage(tenantSignature,"PNG",115,y,65,22); }catch(e){} }
-  else { d.setDrawColor(150); d.line(115,y+20,180,y+20); }
-
-  const fn="Contrato_"+((unit||"").replace(/ /g,"_"))+"_"+((tenantName||"").replace(/ /g,"_"))+"_"+signYear+".pdf";
-  d.save(fn);
-  return fn;
+  d.text("EL ARRENDATARIO",115,y);
+  y+=20;
+  d.setFont("helvetica","normal");
+  d.text("Firma arrendador: _______________________",lm,y);
+  if(data.signatureData){
+    try{d.addImage(data.signatureData,"PNG",105,y-12,80,20);}catch(e){}
+  } else {
+    d.text("Firma arrendatario: _______________________",105,y);
+  }
+  y+=8;
+  d.setFont("helvetica","bolditalic");
+  d.text("Berta Suau",lm,y);
+  d.text(tenantName,115,y);
+  const filename=`Contrato_${unit.replace(/ /g,"_")}_${tenantName.replace(/ /g,"_")}_${signYear}.pdf`;
+  d.save(filename);
+  return filename;
 }
 
+function checkIPC(tenants) {
+  const now=new Date(); const alerts=[];
+  tenants.forEach(ten=>{
+    if(!ten.contractStart)return;
+    const start=new Date(ten.contractStart);
+    if(start.getDate()===now.getDate()&&start.getMonth()===now.getMonth()){
+      const years=now.getFullYear()-start.getFullYear();
+      if(years>0)alerts.push({tenant:ten,years,type:"ipc"});
+      if(years===0)alerts.push({tenant:ten,years:0,type:"signed_today"});
+    }
+    if(ten.contractEnd){
+      const end=new Date(ten.contractEnd);
+      const daysLeft=Math.ceil((end-now)/(1000*60*60*24));
+      if(daysLeft>=0&&daysLeft<=30)alerts.push({tenant:ten,daysLeft,type:"expiring"});
+    }
+  });
+  return alerts;
+}
+
+const T={
+  es:{
+    appName:"MiAlquiler",loginTitle:"Bienvenido",email:"Correo electrónico",password:"Contraseña",
+    login:"Entrar",logout:"Salir",owner:"Propietario",tenant:"Inquilino",dashboard:"Resumen",
+    tenants:"Inquilinos",finances:"Finanzas",maintenance:"Mantenimiento",calendar:"Calendario",
+    myHome:"Mi Piso",myCosts:"Mis Costes",incidents:"Incidencias",messages:"Mensajes",
+    paid:"Pagado",pending:"Pendiente",markPaid:"Marcar pagado",revert:"Revertir",
+    addCost:"Añadir coste",save:"Guardar",newTenant:"Nuevo inquilino",name:"Nombre completo",
+    unit:"Piso / Habitación",phone:"Teléfono",rent:"Alquiler mensual (€)",createAccess:"Crear acceso",
+    concept:"Concepto",amount:"Importe (€)",month:"Mes",typeMsg:"Escribe un mensaje...",
+    sendIncident:"Enviar al propietario",incidentType:"Tipo de problema",description:"Descripción",
+    noTenants:"No hay inquilinos todavía",noMessages:"No hay mensajes aún",
+    noIncidents:"No hay incidencias",noCosts:"Sin costes registrados",
+    costBreakdown:"Desglose de costes",paymentHistory:"Historial de pagos",
+    registered:"Registrado el",dueThisMonth:"Vence este mes",inReview:"En revisión",
+    resolved:"Resuelto",wrongCredentials:"Email o contraseña incorrectos",saving:"Guardando...",
+    joinedSince:"Inquilino desde",totalCosts:"Total costes",monthlyRent:"Alquiler fijo",
+    incomeMonth:"Ingreso mensual",paidCount:"Pagos recibidos",activeTenants:"Inquilinos activos",
+    pendingMaint:"Mantenimiento pendiente",recentIncidents:"Incidencias recientes",hello:"Hola",
+    documents:"Documentos",generateExcel:"Generar Excel anual",downloadDoc:"Descargar",noDocuments:"No hay documentos todavía",docGenerated:"Documento generado",
+    contracts:"Contratos",newContract:"Nuevo contrato",contractGenerated:"Contrato generado",noContracts:"No hay contratos",tenantCreated:"Inquilino y contrato creados",
+    tenantSignature:"Firma del inquilino",tenantConfirm:"He leído y acepto el contrato de arrendamiento",contractDetails:"Datos del contrato",
+    signDate:"Fecha de firma",startDate:"Inicio del contrato",endDate:"Fin del contrato",dni:"DNI",address:"Domicilio actual",accessPassword:"Contraseña de acceso",
+    contractStart:"Inicio contrato",contractEnd:"Fin contrato",editTenant:"Editar inquilino",
+    contractAnniversary:"Subida de IPC",notifications:"Notificaciones",
+    noNotifications:"Sin notificaciones",contractSigned:"Contrato firmado el",
+    yearsAgo:"año(s)",contractExpires:"Contrato expira el",editData:"Editar datos",
+  },
+  en:{
+    appName:"MyRental",loginTitle:"Welcome",email:"Email address",password:"Password",
+    login:"Sign in",logout:"Sign out",owner:"Owner",tenant:"Tenant",dashboard:"Overview",
+    tenants:"Tenants",finances:"Finances",maintenance:"Maintenance",calendar:"Calendar",
+    myHome:"My Flat",myCosts:"My Costs",incidents:"Issues",messages:"Messages",
+    paid:"Paid",pending:"Pending",markPaid:"Mark as paid",revert:"Revert",
+    addCost:"Add cost",save:"Save",newTenant:"New tenant",name:"Full name",
+    unit:"Flat / Room",phone:"Phone",rent:"Monthly rent (€)",createAccess:"Create access",
+    concept:"Concept",amount:"Amount (€)",month:"Month",typeMsg:"Type a message...",
+    sendIncident:"Send to owner",incidentType:"Problem type",description:"Description",
+    noTenants:"No tenants yet",noMessages:"No messages yet",noIncidents:"No issues reported",
+    noCosts:"No costs registered",costBreakdown:"Cost breakdown",paymentHistory:"Payment history",
+    registered:"Registered on",dueThisMonth:"Due this month",inReview:"In review",
+    resolved:"Resolved",wrongCredentials:"Wrong email or password",saving:"Saving...",
+    joinedSince:"Tenant since",totalCosts:"Total costs",monthlyRent:"Fixed rent",
+    incomeMonth:"Monthly income",paidCount:"Payments received",activeTenants:"Active tenants",
+    pendingMaint:"Pending maintenance",recentIncidents:"Recent issues",hello:"Hello",
+    documents:"Documents",generateExcel:"Generate annual Excel",downloadDoc:"Download",noDocuments:"No documents yet",docGenerated:"Document generated",
+    contracts:"Contracts",newContract:"New contract",contractGenerated:"Contract generated",noContracts:"No contracts yet",tenantCreated:"Tenant and contract created",
+    tenantSignature:"Tenant signature",tenantConfirm:"I have read and accept the rental agreement",contractDetails:"Contract details",
+    signDate:"Signing date",startDate:"Contract start",endDate:"Contract end",dni:"ID number",address:"Current address",accessPassword:"Access password",
+    contractStart:"Contract start",contractEnd:"Contract end",editTenant:"Edit tenant",
+    contractAnniversary:"IPC Rent Increase",notifications:"Notifications",
+    noNotifications:"No notifications",contractSigned:"Contract signed on",
+    yearsAgo:"year(s)",contractExpires:"Contract expires on",editData:"Edit data",
+  },
+  ar:{
+    appName:"إيجاري",loginTitle:"مرحباً",email:"البريد الإلكتروني",password:"كلمة المرور",
+    login:"دخول",logout:"خروج",owner:"المالك",tenant:"المستأجر",dashboard:"ملخص",
+    tenants:"المستأجرون",finances:"الماليات",maintenance:"الصيانة",calendar:"التقويم",
+    myHome:"شقتي",myCosts:"تكاليفي",incidents:"البلاغات",messages:"الرسائل",
+    paid:"مدفوع",pending:"معلق",markPaid:"تأكيد الدفع",revert:"تراجع",
+    addCost:"إضافة تكلفة",save:"حفظ",newTenant:"مستأجر جديد",name:"الاسم الكامل",
+    unit:"الشقة / الغرفة",phone:"الهاتف",rent:"الإيجار الشهري (€)",createAccess:"إنشاء حساب",
+    concept:"البند",amount:"المبلغ (€)",month:"الشهر",typeMsg:"اكتب رسالة...",
+    sendIncident:"إرسال للمالك",incidentType:"نوع المشكلة",description:"الوصف",
+    noTenants:"لا يوجد مستأجرون",noMessages:"لا توجد رسائل",noIncidents:"لا توجد بلاغات",
+    noCosts:"لا توجد تكاليف",costBreakdown:"تفاصيل التكاليف",paymentHistory:"سجل المدفوعات",
+    registered:"تم التسجيل في",dueThisMonth:"مستحق هذا الشهر",inReview:"قيد المراجعة",
+    resolved:"تم الحل",wrongCredentials:"بريد إلكتروني أو كلمة مرور خاطئة",saving:"جاري الحفظ...",
+    joinedSince:"مستأجر منذ",totalCosts:"إجمالي التكاليف",monthlyRent:"الإيجار الثابت",
+    incomeMonth:"الدخل الشهري",paidCount:"المدفوعات المستلمة",activeTenants:"المستأجرون النشطون",
+    pendingMaint:"صيانة معلقة",recentIncidents:"البلاغات الأخيرة",hello:"مرحباً",
+    documents:"المستندات",generateExcel:"إنشاء Excel سنوي",downloadDoc:"تحميل",noDocuments:"لا توجد مستندات",docGenerated:"تم إنشاء المستند",
+    contracts:"العقود",newContract:"عقد جديد",contractGenerated:"تم إنشاء العقد",noContracts:"لا توجد عقود",tenantCreated:"تم إنشاء المستأجر والعقد",
+    tenantSignature:"توقيع المستأجر",tenantConfirm:"لقد قرأت وأوافق على عقد الإيجار",contractDetails:"بيانات العقد",
+    signDate:"تاريخ التوقيع",startDate:"بداية العقد",endDate:"نهاية العقد",dni:"رقم الهوية",address:"العنوان الحالي",accessPassword:"كلمة المرور",
+    contractStart:"بداية العقد",contractEnd:"نهاية العقد",editTenant:"تعديل المستأجر",
+    contractAnniversary:"زيادة IPC",notifications:"الإشعارات",
+    noNotifications:"لا توجد إشعارات",contractSigned:"تم توقيع العقد في",
+    yearsAgo:"سنة",contractExpires:"ينتهي العقد في",editData:"تعديل البيانات",
+  }
+};
+
+const avatarColors=["#C4622D","#7A9E7E","#D4A853","#6B8CBA","#9B6BB5","#C4844A"];
+const getColor=(str)=>avatarColors[str?.charCodeAt(0)%avatarColors.length]||"#C4622D";
+const initials=(name)=>name?.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2)||"?";
+const today=()=>new Date().toLocaleDateString("es-ES");
+const maintIcons={"Fontanería":"🚿","Electricidad":"⚡","Calefacción":"🌡️","Ventanas":"🪟","Electrodomésticos":"🔌","Otros":"🔧"};
+
+const css=`
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--cream:#F7F3EE;--dark:#1A1612;--terra:#C4622D;--terra-l:#E8845A;--sage:#7A9E7E;--sage-l:#A8C5AB;--gold:#D4A853;--warm:#8C7B6E;--bg:#FFFCF9;--border:#E8DDD4;--red:#D94F3D;--green:#4A9B6F;}
+body{font-family:'DM Sans',sans-serif;background:var(--cream);color:var(--dark);font-size:15px}
+.serif{font-family:'DM Serif Display',serif}
+.lang-screen{min-height:100vh;background:var(--dark);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:32px;padding:20px}
+.lang-title{font-family:'DM Serif Display',serif;font-size:52px;color:var(--cream);letter-spacing:-1px;text-align:center}
+.lang-title em{color:var(--terra-l);font-style:italic}
+.lang-cards{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.lang-card{background:#2A2420;border:2px solid #3A3028;border-radius:16px;padding:24px 32px;cursor:pointer;text-align:center;transition:all .2s;color:var(--cream)}
+.lang-card:hover{border-color:var(--terra);background:#332A25}
+.lang-card .flag{font-size:36px;margin-bottom:8px}
+.lang-card p{font-size:15px;font-weight:500}
+.login-wrap{min-height:100vh;background:var(--dark);display:flex;align-items:center;justify-content:center;padding:20px}
+.login-box{background:#2A2420;border:1px solid #3A3028;border-radius:24px;padding:40px 36px;width:100%;max-width:380px}
+.login-box h2{font-family:'DM Serif Display',serif;font-size:28px;color:var(--cream);margin-bottom:6px}
+.login-box p{color:var(--warm);font-size:13px;margin-bottom:28px}
+.login-err{background:#3D1A18;border:1px solid var(--red);color:#F5A49A;padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:16px}
+.app{display:flex;min-height:100vh}
+.sidebar{width:220px;background:var(--dark);display:flex;flex-direction:column;padding:28px 16px;position:fixed;top:0;left:0;bottom:0;z-index:50}
+@media(max-width:600px){
+  .sidebar{top:0;bottom:0;left:0;flex-direction:column;padding:20px 10px;z-index:55}
+  .sidebar.collapsed{width:0!important;min-width:0!important;padding:0!important}
+  .gr2{grid-template-columns:1fr!important}
+  .g2{grid-template-columns:1fr!important}
+  .stats{grid-template-columns:1fr 1fr!important}
+  .chat-wrap{height:calc(100vh - 160px)}
+  table{font-size:12px}
+  th,td{padding:8px 6px}
+  .page-hd h2{font-size:22px}
+  .btn{padding:8px 14px;font-size:13px}
+  .toast{bottom:20px;right:12px;left:12px;text-align:center}
+  .modal{padding:20px 16px;max-height:92vh;border-radius:20px 20px 0 0;align-self:flex-end}
+  .overlay{align-items:flex-end;padding:0}
+  .pay-box{padding:20px}
+  .pay-box .amount{font-size:32px}
+  .nav-item{padding:10px 10px;font-size:13px}
+  .nav-item span{font-size:18px}
+}
+.s-logo{font-family:'DM Serif Display',serif;font-size:22px;color:var(--cream);padding:0 10px}
+.s-logo em{color:var(--terra-l);font-style:italic}
+.s-role{font-size:11px;color:var(--warm);text-transform:uppercase;letter-spacing:1px;padding:0 10px;margin:4px 0 24px}
+.s-nav{flex:1;display:flex;flex-direction:column;gap:3px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:10px;cursor:pointer;color:var(--warm);font-size:14px;font-weight:500;transition:all .2s;border:none;background:none;width:100%;text-align:left;font-family:'DM Sans',sans-serif}
+.nav-item:hover{background:#2A2420;color:var(--cream)}
+.nav-item.active-o{background:var(--terra);color:#fff}
+.nav-item.active-t{background:var(--sage);color:#fff}
+.s-footer{border-top:1px solid #2A2420;padding-top:14px;margin-top:auto;display:flex;align-items:center;gap:8px}
+.s-user-info{flex:1;min-width:0}
+.s-user-info strong{font-size:13px;color:var(--cream);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-user-info span{font-size:11px;color:var(--warm)}
+.logout-btn{background:none;border:none;color:var(--warm);cursor:pointer;font-size:16px;padding:4px;transition:color .2s}
+.logout-btn:hover{color:var(--cream)}
+.notif-wrap{position:relative}
+.notif-btn{background:none;border:none;color:var(--warm);cursor:pointer;font-size:18px;padding:4px;position:relative}
+.notif-dot{position:absolute;top:2px;right:2px;width:8px;height:8px;background:var(--red);border-radius:50%}
+.notif-panel{position:absolute;bottom:40px;right:0;background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:16px;width:280px;box-shadow:0 8px 32px rgba(0,0,0,.15);z-index:100}
+.notif-panel-title{font-size:12px;font-weight:600;color:var(--warm);text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px}
+.notif-item{padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;line-height:1.5}
+.notif-item:last-child{border-bottom:none}
+.content{margin-left:220px;padding:40px;flex:1;min-height:100vh}
+@media(max-width:800px){.sidebar{width:180px}.content{margin-left:180px;padding:24px 16px}}
+.av{border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;color:#fff;flex-shrink:0}
+.av-sm{width:34px;height:34px;font-size:13px}
+.av-md{width:48px;height:48px;font-size:18px;font-family:'DM Serif Display',serif}
+.av-lg{width:72px;height:72px;font-size:26px;font-family:'DM Serif Display',serif}
+.page-hd{margin-bottom:32px}
+.page-hd h2{font-family:'DM Serif Display',serif;font-size:32px;letter-spacing:-.5px}
+.page-hd p{color:var(--warm);font-size:14px;margin-top:4px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.fade{animation:fadeIn .3s ease}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:28px}
+.stat{background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:22px 20px}
+.stat .lbl{font-size:11px;color:var(--warm);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
+.stat .val{font-family:'DM Serif Display',serif;font-size:30px;line-height:1}
+.stat.tl{border-left:4px solid var(--terra)}
+.stat.sl{border-left:4px solid var(--sage)}
+.stat.gl{border-left:4px solid var(--gold)}
+.stat.rl{border-left:4px solid var(--red)}
+.card{background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:24px;margin-bottom:20px}
+.card-title{font-family:'DM Serif Display',serif;font-size:18px;margin-bottom:18px;display:flex;align-items:center;gap:8px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:900px){.g2{grid-template-columns:1fr}}
+.t-row{display:flex;align-items:center;gap:14px;padding:16px;border-radius:12px;border:1px solid var(--border);background:#fff;cursor:pointer;transition:box-shadow .2s;margin-bottom:10px}
+.t-row:hover{box-shadow:0 4px 16px rgba(0,0,0,.07)}
+.t-info{flex:1}
+.t-info strong{font-size:15px;display:block}
+.t-info span{font-size:13px;color:var(--warm)}
+.badge{font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+.mi{display:flex;align-items:flex-start;gap:14px;padding:16px;border-radius:12px;border:1px solid var(--border);background:#fff;margin-bottom:10px}
+.mi-icon{width:40px;height:40px;border-radius:10px;background:#FDF3EE;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.mi-info{flex:1}
+.mi-info strong{font-size:14px;display:block}
+.mi-info .meta{font-size:12px;color:var(--warm);margin-top:3px}
+.mi-info p{font-size:13px;color:#555;margin-top:6px;line-height:1.5}
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--warm);padding:0 14px 12px;border-bottom:1px solid var(--border);font-weight:600;white-space:nowrap}
+td{padding:13px 14px;border-bottom:1px solid var(--border);font-size:14px}
+tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--cream)}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:600;border:none;cursor:pointer;transition:all .2s;font-family:'DM Sans',sans-serif}
+.btn-p{background:var(--terra);color:#fff}.btn-p:hover{background:var(--terra-l)}
+.btn-s{background:var(--sage);color:#fff}.btn-s:hover{background:var(--sage-l)}
+.btn-o{background:transparent;border:1.5px solid var(--border);color:var(--dark)}.btn-o:hover{border-color:var(--terra);color:var(--terra)}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn-full{width:100%;justify-content:center}
+.fg{margin-bottom:16px}
+.fg label{font-size:12px;font-weight:600;color:var(--warm);text-transform:uppercase;letter-spacing:.7px;display:block;margin-bottom:6px}
+.fg input,.fg select,.fg textarea{width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;background:#fff;color:var(--dark);transition:border-color .2s;outline:none}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--terra)}
+.fg textarea{resize:vertical;min-height:80px}
+.gr2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.pay-box{border-radius:20px;padding:28px;text-align:center;margin-bottom:20px}
+.pay-box h3{font-family:'DM Serif Display',serif;font-size:24px;margin-bottom:4px}
+.pay-box .amount{font-family:'DM Serif Display',serif;font-size:40px;margin:14px 0;color:var(--dark)}
+.pay-box p{font-size:14px;color:var(--warm)}
+.pay-box .sico{font-size:48px;margin-bottom:10px}
+.cr{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border)}
+.cr:last-child{border-bottom:none}
+.cr .cn{font-size:14px;display:flex;align-items:center;gap:8px}
+.cr .ca{font-weight:600;font-size:15px}
+.overlay{position:fixed;inset:0;background:rgba(20,15,10,.55);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal{background:var(--bg);border-radius:20px;padding:32px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto}
+.modal-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+.modal-hd h3{font-family:'DM Serif Display',serif;font-size:22px}
+.close-btn{background:none;border:none;font-size:20px;cursor:pointer;color:var(--warm);padding:4px}
+.close-btn:hover{color:var(--dark)}
+.prof-hd{display:flex;align-items:center;gap:18px;margin-bottom:24px}
+.prof-hd-info h3{font-family:'DM Serif Display',serif;font-size:22px}
+.prof-hd-info p{color:var(--warm);font-size:14px}
+.prof-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pf-lbl{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--warm);font-weight:600;margin-bottom:3px}
+.pf-val{font-size:15px;font-weight:500}
+.chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:400px}
+.chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;background:#fff;border-radius:16px 16px 0 0;border:1px solid var(--border)}
+.msg{max-width:75%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.5}
+.msg.mine{align-self:flex-end;background:var(--terra);color:#fff;border-bottom-right-radius:4px}
+.msg.theirs{align-self:flex-start;background:var(--cream);color:var(--dark);border-bottom-left-radius:4px}
+.msg .msg-meta{font-size:11px;opacity:.7;margin-top:4px}
+.chat-input{display:flex;gap:8px;padding:12px;background:#fff;border:1px solid var(--border);border-top:none;border-radius:0 0 16px 16px}
+.chat-input input{flex:1;padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;outline:none}
+.chat-input input:focus{border-color:var(--terra)}
+.chat-tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.chat-tab{padding:8px 16px;border-radius:20px;border:1.5px solid var(--border);font-size:13px;cursor:pointer;background:#fff;transition:all .2s;font-family:'DM Sans',sans-serif}
+.chat-tab.active{background:var(--terra);border-color:var(--terra);color:#fff}
+hr{border:none;border-top:1px solid var(--border);margin:18px 0}
+.saving{font-size:11px;color:var(--warm);display:flex;align-items:center;gap:6px;margin-bottom:16px}
+.saving::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--sage);display:inline-block}
+.status-sel{font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:pointer;font-family:'DM Sans',sans-serif}
+.toast{position:fixed;bottom:30px;right:30px;background:var(--dark);color:var(--cream);padding:14px 20px;border-radius:12px;font-size:14px;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.2);max-width:320px}
+@keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+.toast{animation:slideUp .3s ease}
+.alert-banner{background:linear-gradient(135deg,#FDF6E3,#FAF0D0);border:1.5px solid var(--gold);border-radius:14px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:flex-start;gap:12px}
+.alert-banner .al-icon{font-size:24px;flex-shrink:0}
+.alert-banner .al-title{font-weight:600;font-size:14px;margin-bottom:2px}
+.alert-banner .al-sub{font-size:13px;color:var(--warm)}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:16px}
+.cal-day-name{text-align:center;font-size:11px;color:var(--warm);font-weight:600;padding:4px 0;text-transform:uppercase}
+.cal-day{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:10px;font-size:13px;cursor:default;position:relative}
+.cal-day.empty{background:transparent}
+.cal-day.normal{background:#fff;border:1px solid var(--border)}
+.cal-day.today-day{background:var(--terra);color:#fff;font-weight:700}
+.cal-day.has-event{border:2px solid var(--gold);cursor:pointer}
+.cal-day.has-expiry{border:2px solid var(--red);cursor:pointer}
+.cal-event-dot{width:6px;height:6px;border-radius:50%;background:var(--gold);margin-top:2px}
+.hamburger-btn{display:none}
+@media(max-width:600px){
+  .hamburger-btn{display:flex;position:fixed;top:10px;left:10px;z-index:60;background:var(--dark);border:none;color:var(--cream);font-size:18px;width:36px;height:36px;border-radius:10px;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+  .hamburger-btn.open{display:none}
+}
+.cal-nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.cal-nav button{background:none;border:none;font-size:20px;cursor:pointer;color:var(--warm);padding:4px 8px}
+.cal-nav button:hover{color:var(--dark)}
+.cal-legend{display:flex;gap:16px;margin-top:12px;flex-wrap:wrap}
+.cal-legend-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--warm)}
+.cal-legend-dot{width:10px;height:10px;border-radius:50%}
+.contract-card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:10px}
+.contract-dates{display:flex;gap:16px;flex-wrap:wrap;margin-top:6px}
+.contract-date-item{font-size:13px;color:var(--warm)}
+.contract-date-item span{color:var(--dark);font-weight:500}
+`;
+
+export default function App() {
+  const [lang,setLang]=useState(null);
+  const [user,setUser]=useState(undefined);
+  const [profile,setProfile]=useState(null);
+  const [page,setPage]=useState("dashboard");
+  const [modal,setModal]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [saving,setSaving]=useState(false);
+  const [tenants,setTenants]=useState([]);
+  const [showNotif,setShowNotif]=useState(false);
+  const [sidebarOpen,setSidebarOpen]=useState(true);
+  const [documents,setDocuments]=useState([]);
+  const [contracts,setContracts]=useState([]);
+  const [properties,setProperties]=useState([]);
+  const [currentProp,setCurrentProp]=useState(null); // {id, name, buildings:[]}
+  const [units,setUnits]=useState([]); // [{id, name, building, propId}]
+
+  const t=T[lang||"es"];
+  const isOwner=profile?.role==="owner";
+  const anniversaries=isOwner?checkIPC(tenants):[];
+  const freeUnits=isOwner?units.filter(u=>(!currentProp||u.propId===currentProp.id)&&!tenants.find(t=>t.unit===u.name&&t.building===u.building)):[];
+
+  useEffect(()=>{
+    const unsub=onAuthStateChanged(auth,async(u)=>{
+      setUser(u);
+      if(u){const snap=await getDoc(doc(db,"users",u.uid));if(snap.exists()){setProfile(snap.data());setLang(snap.data().lang||"es");}}
+      else setProfile(null);
+    });
+    return unsub;
+  },[]);
+
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"properties",user.uid,"list"),snap=>{
+      const props=snap.docs.map(d=>({id:d.id,...d.data()}));
+      setProperties(props);
+      if(props.length===1)setCurrentProp(props[0]);
+      // First time: create default Calafell property
+      if(props.length===0){
+        addDoc(collection(db,"properties",user.uid,"list"),{
+          name:"Calafell",
+          buildings:["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C","C/ Montserrat 14","C/ Barceloneta 3","C/ Torredembarra 13","Monjos"],
+          createdAt:serverTimestamp()
+        });
+      }
+    });
+  },[user,isOwner]);
+
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"units",user.uid,"list"),snap=>{
+      setUnits(snap.docs.map(d=>({id:d.id,...d.data()})));
+    });
+  },[user,isOwner]);
+
+  async function saveUnit(unit){
+    await addDoc(collection(db,"units",user.uid,"list"),{...unit,createdAt:serverTimestamp()});
+  }
+  async function deleteUnit(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"units",user.uid,"list",id));
+    showToast("🗑️ Unidad eliminada");
+  }
+
+  useEffect(()=>{
+    if(!isOwner)return;
+    const q=query(collection(db,"users"),where("role","==","tenant"));
+    const unsub=onSnapshot(q,snap=>{
+      const all=snap.docs.map(d=>({id:d.id,...d.data()}));
+      // Filter by current property if set
+      setTenants(currentProp?all.filter(t=>t.propId===currentProp.id):all);
+    });
+    return unsub;
+  },[isOwner,currentProp]);
+
+  useEffect(()=>{
+    if(!isOwner||!user)return;
+    const q=query(collection(db,"documents",user.uid,"files"),orderBy("createdAt","desc"));
+    const unsub=onSnapshot(q,snap=>setDocuments(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    return unsub;
+  },[isOwner,user]);
+
+  async function saveDocument(docInfo){
+    await addDoc(collection(db,"documents",user.uid,"files"),{...docInfo,createdAt:serverTimestamp()});
+  }
+
+  useEffect(()=>{
+    if(!isOwner||!user)return;
+    const q=query(collection(db,"contracts",user.uid,"files"),orderBy("createdAt","desc"));
+    const unsub=onSnapshot(q,snap=>setContracts(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    return unsub;
+  },[isOwner,user]);
+
+  // INVOICES
+  const [invoices,setInvoices]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"invoices",user.uid,"files"),snap=>{
+      setInvoices(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>a.invoiceNum-b.invoiceNum));
+    });
+  },[user,isOwner]);
+  async function saveInvoice(inv){
+    await addDoc(collection(db,"invoices",user.uid,"files"),{...inv,propId:currentProp?.id||"",createdAt:serverTimestamp()});
+  }
+  async function deleteInvoice(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"invoices",user.uid,"files",id));
+    showToast("🗑️ Factura eliminada");
+  }
+
+  // RECEIPTS
+  const [receipts,setReceipts]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"receipts",user.uid,"files"),snap=>{
+      setReceipts(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));
+    });
+  },[user,isOwner]);
+  async function saveReceipt(rec){
+    await addDoc(collection(db,"receipts",user.uid,"files"),{...rec,propId:currentProp?.id||"",createdAt:serverTimestamp()});
+  }
+  async function deleteReceipt(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"receipts",user.uid,"files",id));
+    showToast("🗑️ Recibo eliminado");
+  }
+
+  async function saveContract(contractInfo){
+    await addDoc(collection(db,"contracts",user.uid,"files"),{...contractInfo,createdAt:serverTimestamp()});
+  }
+
+  async function deleteContract(contractId){
+    const {deleteDoc} = await import("firebase/firestore");
+    await deleteDoc(doc(db,"contracts",user.uid,"files",contractId));
+    showToast("🗑️ Contrato eliminado");
+  }
+
+  const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
+  const persist=async(ref,data)=>{setSaving(true);await updateDoc(ref,data);setSaving(false);};
+
+  if(user===undefined)return(<><style>{css}</style><div style={{minHeight:"100vh",background:"#1A1612",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:"#8C7B6E",fontFamily:"'DM Sans',sans-serif"}}>Cargando...</p></div></>);
+  if(!lang&&!user)return(<><style>{css}</style><LangSelect onSelect={setLang}/></>);
+  if(!user)return(<><style>{css}</style><LoginScreen t={t} onLogin={(u,p)=>{setUser(u);setProfile(p);setPage(p.role==="owner"?"dashboard":"t-home");}}/></>);
+  if(isOwner&&!currentProp)return(<><style>{css}</style><PropertySelector user={user} properties={properties} onSelect={setCurrentProp}
+    onCreateProp={async(name,buildings)=>{
+      await addDoc(collection(db,"properties",user.uid,"list"),{name,buildings,createdAt:serverTimestamp()});
+      showToast("✅ Propiedad '"+name+"' creada");
+    }}
+    onUpdateProp={async(id,name,buildings)=>{
+      const {updateDoc}=await import("firebase/firestore");
+      await updateDoc(doc(db,"properties",user.uid,"list",id),{name,buildings});
+      showToast("✅ Propiedad actualizada");
+    }}
+    onDeleteProp={async(id)=>{
+      const {deleteDoc}=await import("firebase/firestore");
+      await deleteDoc(doc(db,"properties",user.uid,"list",id));
+      showToast("🗑️ Propiedad eliminada");
+    }}
+  /></>);
+
+  const ownerNav=[
+    {id:"dashboard",icon:"📊",label:t.dashboard},
+    {id:"tenants",icon:"👥",label:t.tenants},
+    {id:"finances",icon:"💰",label:t.finances},
+    {id:"maintenance",icon:"🔧",label:t.maintenance},
+    {id:"calendar",icon:"📅",label:t.calendar},
+    {id:"messages",icon:"💬",label:t.messages},
+    {id:"documentos",icon:"📁",label:t.documents},
+    {id:"contratos",icon:"📝",label:t.contracts},
+    {id:"facturas",icon:"🧾",label:"Facturas"},
+    {id:"recibos",icon:"🖨️",label:"Recibos"},
+    {id:"trasteros",icon:"📦",label:"Trasteros"},
+  ];
+  const tenantNav=[
+    {id:"t-home",icon:"🏠",label:t.myHome},
+    {id:"t-costs",icon:"⚡",label:t.myCosts},
+    {id:"t-maint",icon:"🔧",label:t.incidents},
+    {id:"t-messages",icon:"💬",label:t.messages},
+  ];
+  const nav=isOwner?ownerNav:tenantNav;
+
+  async function togglePayment(tenantId,month){
+    const t2=tenants.find(x=>x.id===tenantId);if(!t2)return;
+    const payments={...(t2.payments||{})};const cur=payments[month]||{paid:false};
+    const nowPaying=!cur.paid;
+    payments[month]={paid:nowPaying,date:nowPaying?today():null};
+    await persist(doc(db,"users",tenantId),{payments});
+
+    if(nowPaying){
+      const now=new Date();
+      const year=now.getFullYear();
+      const dateStr=today();
+      const concept=`Alquiler ${t2.unit||""} ${month}`;
+
+      // Generate FACTURA if docType is factura or ambos
+      if(t2.docType==="factura"||t2.docType==="ambos"){
+        const allInvNums=invoices.filter(i=>i.year===year).map(i=>i.invoiceNum);
+        const nextNum=allInvNums.length>0?Math.max(...allInvNums)+1:7;
+        const base=parseFloat(t2.docType==="ambos"?t2.rentFactura:t2.rent)||0;
+        const inv={
+          invoiceNum:nextNum, year, date:dateStr, concept,
+          base, tenantId, tenantName:t2.name,
+          clientName:t2.name, clientNif:t2.dni||"",
+          clientAddress:t2.address||"", clientEmail:t2.email||""
+        };
+        await saveInvoice(inv);
+        generateInvoicePDF(inv);
+      }
+
+      // Generate RECIBO if docType is recibo or ambos
+      if(t2.docType==="recibo"||t2.docType==="ambos"||!t2.docType){
+        const allRecNums=receipts.filter(r=>r.year===year).map(r=>r.receiptNum);
+        const nextNum=allRecNums.length>0?Math.max(...allRecNums)+1:1;
+        const amount=parseFloat(t2.docType==="ambos"?t2.rentRecibo:t2.rent)||0;
+        const rec={
+          receiptNum:nextNum, year, date:dateStr, concept,
+          amount, tenantId, tenantName:t2.name,
+          clientName:t2.name, clientDni:t2.dni||""
+        };
+        await saveReceipt(rec);
+        generateReceiptPDF(rec);
+      }
+
+      showToast("✅ Pago registrado · Documento generado y guardado");
+    }else{
+      showToast("❌ Pago revertido");
+    }
+  }
+
+  async function changeStatus(tenantId,maintId,status){
+    const t2=tenants.find(x=>x.id===tenantId);
+    const maintenance=(t2.maintenance||[]).map(m=>m.id===maintId?{...m,status}:m);
+    await persist(doc(db,"users",tenantId),{maintenance});
+    showToast("✅ Estado actualizado");
+  }
+
+  async function sendMaintenance(type,desc){
+    const maintenance=[...(profile.maintenance||[]),{id:Date.now(),type,date:today(),status:"Pendiente",desc}];
+    await persist(doc(db,"users",user.uid),{maintenance});
+    setProfile(p=>({...p,maintenance}));
+    showToast("✅ Incidencia enviada");
+  }
+
+  async function renewContract(tenantId, months){
+    const ten=tenants.find(x=>x.id===tenantId);if(!ten)return;
+    const currentEnd=ten.contractEnd?new Date(ten.contractEnd):new Date();
+    const newEnd=new Date(currentEnd);
+    newEnd.setMonth(newEnd.getMonth()+parseInt(months));
+    const newEndStr=newEnd.toISOString().split("T")[0];
+    // Apply IPC if enabled (+1.5%)
+    let newRent=ten.rent;
+    let newRentRecibo=ten.rentRecibo;
+    let newRentFactura=ten.rentFactura;
+    if(ten.ipcEnabled==="si"){
+      newRent=Math.round(ten.rent*1.015*100)/100;
+      if(ten.rentRecibo)newRentRecibo=Math.round(ten.rentRecibo*1.015*100)/100;
+      if(ten.rentFactura)newRentFactura=Math.round(ten.rentFactura*1.015*100)/100;
+    }
+    await persist(doc(db,"users",tenantId),{
+      contractEnd:newEndStr,
+      contractStart:ten.contractEnd||ten.contractStart,
+      rent:newRent,
+      ...(ten.rentRecibo?{rentRecibo:newRentRecibo}:{}),
+      ...(ten.rentFactura?{rentFactura:newRentFactura}:{})
+    });
+    setModal(null);
+    showToast(`✅ Contrato renovado hasta ${newEndStr}${ten.ipcEnabled==="si"?" · IPC +1,5% aplicado":""}`);
+  }
+
+  async function updateTenantField(tenantId,field,value){
+    await persist(doc(db,"users",tenantId),{[field]:value});
+    showToast("✅ Actualizado");
+  }
+
+  async function deleteTenant(tenantId){
+    if(!window.confirm("¿Eliminar este inquilino? Se borrarán todos sus datos."))return;
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"users",tenantId));
+    setModal(null);
+    showToast("🗑️ Inquilino eliminado");
+  }
+
+  async function addCost(tenantId,cost){
+    const ten=tenants.find(x=>x.id===tenantId);
+    const costs=[...(ten.costs||[]),{id:Date.now(),...cost}];
+    await persist(doc(db,"users",tenantId),{costs});
+    setModal(null);showToast("✅ Coste añadido");
+  }
+
+  async function deleteCost(tenantId,costId){
+    const ten=tenants.find(x=>x.id===tenantId);
+    const costs=(ten.costs||[]).filter(c=>c.id!==costId);
+    await persist(doc(db,"users",tenantId),{costs});
+    showToast("🗑️ Coste eliminado");
+  }
+
+  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes,rentRecibo,rentFactura,ipcEnabled}){
+    try{
+      const tenantRef=doc(collection(db,"users"));
+      await setDoc(tenantRef,{
+        name,unit,phone:phone||"",rent:parseFloat(rent),email:email||"",role:"tenant",
+        joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
+        docType:docType||"recibo",building:building||"",propId:currentProp?.id||"",
+        payFreq:payFreq||"mensual",ipcEnabled:ipcEnabled||"si",
+        rentRecibo:docType==="ambos"?parseFloat(rentRecibo)||0:0,
+        rentFactura:docType==="ambos"?parseFloat(rentFactura)||0:0,
+        fianza:fianza||"no",fianzaAmount:fianza==="si"?parseFloat(fianzaAmount)||0:0,
+        notes:notes||"",
+        payments:{},costs:[],maintenance:[],lang:"es"
+      });
+      showToast("✅ Inquilino creado");
+      return tenantRef.id;
+    }catch(e){showToast("❌ Error: "+e.message);}
+  }
+
+  async function editTenant(tenantId,data){
+    await persist(doc(db,"users",tenantId),data);
+    setModal(null);showToast("✅ Datos actualizados");
+  }
+
+  const renderPage=()=>{
+    if(isOwner){
+      if(page==="dashboard")return<Dashboard t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})}/>;
+      if(page==="tenants")return<Tenants t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})} onDelete={id=>{if(confirm("¿Eliminar este inquilino? Se borrarán todos sus datos."))deleteTenant(id);}}/>;
+      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onDeleteCost={deleteCost}/>;
+      if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
+      if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
+      if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
+      if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
+      if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
+      if(page==="trasteros")return<TrasterosPage tenants={tenants} units={units.filter(u=>!currentProp||u.propId===currentProp.id)} buildings={currentProp?.buildings||[]} propId={currentProp?.id||""} onSaveUnit={saveUnit} onDeleteUnit={deleteUnit} onAssignTenant={(unit)=>setModal({type:"assign-tenant",unit})}/>;
+      if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
+      if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
+    }else{
+      if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
+      if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
+      if(page==="t-maint")return<TenantMaintenance t={t} profile={profile} onSend={sendMaintenance}/>;
+      if(page==="t-messages")return<TenantMessages t={t} tenantId={user.uid}/>;
+    }
+  };
+
+  const renderModal=()=>{
+    if(!modal)return null;
+    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})} contracts={contracts} onUploadContract={()=>setModal({type:"upload-contract-tenant",id:modal.id})} onDelete={()=>deleteTenant(modal.id)} onUpdateField={updateTenantField}/>;}
+    if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} buildings={currentProp?.buildings||[]} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
+    if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant} propBuildings={currentProp?.buildings||[]}/>;}
+    if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
+    if(modal.type==="assign-tenant"){
+      return<AssignTenantModal
+        unit={modal.unit}
+        buildings={currentProp?.buildings||[]}
+        onClose={()=>setModal(null)}
+        onSave={async(tenantData,contractData)=>{
+          const id=await createTenant({...tenantData,unit:modal.unit.name,building:modal.unit.building});
+          if(contractData&&id){
+            await saveContract({...contractData,tenantUid:id,date:today(),year:new Date().getFullYear()});
+          }
+          showToast("✅ Inquilino asignado"+(contractData?" · Contrato creado":""));
+          setModal(null);
+        }}
+      />;
+    }
+    if(modal.type==="manage-buildings"){
+      return<ManageBuildingsModal
+        prop={currentProp}
+        onClose={()=>setModal(null)}
+        onSave={async(buildings)=>{
+          const {updateDoc}=await import("firebase/firestore");
+          await updateDoc(doc(db,"properties",user.uid,"list",currentProp.id),{buildings});
+          setCurrentProp(p=>({...p,buildings}));
+          showToast("✅ Naves actualizadas");
+          setModal(null);
+        }}
+      />;
+    }
+    if(modal.type==="renew-contract"){
+      const ten=tenants.find(x=>x.id===modal.tenantId);
+      return<RenewContractModal tenant={ten} onClose={()=>setModal(null)} onRenew={(months)=>renewContract(modal.tenantId,months)}/>;
+    }
+    if(modal.type==="new-invoice"){
+      const ten=tenants.find(x=>x.id===modal.tenantId);
+      return<NewInvoiceModal t={t} tenant={ten} invoices={invoices} onClose={()=>setModal(null)} onSave={async(inv)=>{
+        await saveInvoice(inv);
+        showToast("✅ Factura guardada");
+      }}/>;
+    }
+    if(modal.type==="new-receipt"){
+      const ten=tenants.find(x=>x.id===modal.tenantId);
+      return<NewReceiptModal t={t} tenant={ten} receipts={receipts} onClose={()=>setModal(null)} onSave={async(rec)=>{
+        await saveReceipt(rec);
+        showToast("✅ Recibo guardado");
+      }}/>;
+    }
+    if(modal.type==="upload-contract-tenant"){
+      const ten=modal.prefillData||tenants.find(x=>x.id===modal.id);
+      return<UploadContractModal t={t} onClose={()=>setModal(null)} prefill={ten} onSave={async(data)=>{
+        await saveContract({...data,year:data.signYear||new Date().getFullYear(),date:today(),tenantUid:modal.id});
+        showToast("✅ Contrato guardado");
+      }}/>;
+    }
+    if(modal.type==="upload-contract")return<UploadContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
+      const tenantRef=doc(collection(db,"users"));
+      await setDoc(tenantRef,{
+        name:data.tenantName,unit:data.unit,phone:data.phone||"",
+        rent:parseFloat(data.rent)||0,email:data.email||"",role:"tenant",
+        joined:today(),contractStart:data.contractStartISO||"",
+        contractEnd:data.contractEndISO||"",
+        payments:{},costs:[],maintenance:[],lang:"es"
+      });
+      await saveContract({...data,year:data.signYear||new Date().getFullYear(),date:today(),tenantUid:tenantRef.id});
+      showToast("✅ Inquilino y contrato guardados");
+    }}/>;
+    if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
+      const year=data.signYear;
+      try{
+        // Guardar inquilino directamente en Firestore (sin crear cuenta de acceso)
+        const tenantRef=doc(collection(db,"users"));
+        await setDoc(tenantRef,{
+          name:data.tenantName, unit:data.unit, phone:data.phone||"",
+          rent:parseFloat(data.rent), email:data.email||"", role:"tenant",
+          joined:today(), contractStart:data.contractStartISO||"",
+          contractEnd:data.contractEndISO||"",
+          payments:{}, costs:[], maintenance:[], lang:"es"
+        });
+        // Guardar contrato
+        await saveContract({...data, year, date:today(), tenantUid:tenantRef.id});
+        showToast("✅ Inquilino y contrato guardados");
+      }catch(e){
+        showToast("⚠️ Error: "+e.message);
+      }
+    }}/>;
+    return null;
+  };
+
+  const activeClass=(id)=>id===page?(isOwner?"nav-item active-o":"nav-item active-t"):"nav-item";
+
+  return(
+    <><style>{css}</style>
+      <div className="app">
+        <aside className={`sidebar${sidebarOpen?"":" collapsed"}`} style={{width:sidebarOpen?"220px":"64px",transition:"width .25s",overflow:"hidden",minWidth:sidebarOpen?"220px":"64px"}}> 
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 6px 0 10px",marginBottom:4}}>
+            {sidebarOpen&&<div className="s-logo">Mi<em>Alquiler</em></div>}
+            <button onClick={()=>setSidebarOpen(v=>!v)} style={{background:"none",border:"none",color:"var(--warm)",cursor:"pointer",fontSize:18,padding:"4px 6px",marginLeft:"auto"}}>{sidebarOpen?"◀":"▶"}</button>
+          </div>
+          {sidebarOpen&&<div className="s-role">{isOwner?t.owner:t.tenant}</div>}
+          {sidebarOpen&&isOwner&&currentProp&&(
+            <div style={{margin:"0 10px 6px",background:"#2A2420",borderRadius:8,padding:"6px 10px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{fontSize:12,color:"var(--cream)",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🏢 {currentProp.name}</div>
+              <button style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:14,padding:"0 0 0 6px",flexShrink:0}} onClick={()=>setCurrentProp(null)} title="Cambiar propiedad">⇄</button>
+            </div>
+          )}
+          <nav className="s-nav">
+            {nav.map(item=>(
+              <button key={item.id} className={activeClass(item.id)} onClick={()=>setPage(item.id)} title={item.label}>
+                <span>{item.icon}</span>{sidebarOpen&&" "+item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="s-footer">
+            <div className="av av-sm" style={{background:getColor(profile?.name||"")}}>{initials(profile?.name||"?")}</div>
+            {sidebarOpen&&<div className="s-user-info">
+              <strong>{profile?.name||user.email}</strong>
+              <span>{isOwner?t.owner:profile?.unit}</span>
+            </div>}
+            {isOwner&&(
+              <div className="notif-wrap">
+                <button className="notif-btn" onClick={e=>{e.stopPropagation();setShowNotif(v=>!v);}}>
+                  🔔{(anniversaries.length>0||freeUnits.length>0)&&<span className="notif-dot"/>}
+                </button>
+                {showNotif&&(
+                  <div className="notif-panel" onClick={e=>e.stopPropagation()}>
+                    <div className="notif-panel-title">{t.notifications}</div>
+                    {anniversaries.length===0&&freeUnits.length===0
+                      ?<div style={{fontSize:13,color:"var(--warm)"}}>{t.noNotifications}</div>
+                      :<>
+                      {freeUnits.map((u,i)=>(
+                        <div key={"free"+i} className="notif-item">
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                            <span>🟢 <strong>{u.name}</strong> · {u.building} — Libre</span>
+                          </div>
+                        </div>
+                      ))}
+                      {anniversaries.map((a,i)=>(
+                        <div key={i} className="notif-item">
+                          {a.type==="ipc"&&`📈 ${a.tenant.name} · Subida IPC (${a.years} año/s) · desde ${a.tenant.contractStart}`}
+                          {a.type==="signed_today"&&`📝 ${a.tenant.name} · ${t.contractSigned} ${a.tenant.contractStart}`}
+                          {a.type==="expiring"&&(
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                              <span>⚠️ {a.tenant.name} · expira {a.tenant.contractEnd} ({a.daysLeft} días)</span>
+                              <button className="btn btn-p btn-sm" style={{fontSize:11,padding:"3px 8px",flexShrink:0}} onClick={()=>{setShowNotif(false);setModal({type:"renew-contract",tenantId:a.tenant.id});}}>🔄 Renovar</button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      </>}
+                  </div>
+                )}
+              </div>
+            )}
+            <button className="logout-btn" onClick={()=>signOut(auth)} title={t.logout}>↩</button>
+          </div>
+        </aside>
+        <main className="content fade" key={page} style={{marginLeft:sidebarOpen?"220px":"64px",transition:"margin-left .25s",minWidth:0,width:"100%"}} onClick={()=>setShowNotif(false)}>
+          {!sidebarOpen&&<button className="hamburger-btn" onClick={e=>{e.stopPropagation();setSidebarOpen(true);}}>☰</button>}
+          {saving&&<div className="saving">{t.saving}</div>}
+          {isOwner&&freeUnits.length>0&&page==="dashboard"&&freeUnits.map((u,i)=>(
+            <div key={"fu"+i} className="alert-banner" style={{borderLeft:"4px solid #4A9B6F"}}>
+              <div className="al-icon">🟢</div>
+              <div>
+                <div className="al-title">Unidad libre · {u.name}</div>
+                <div className="al-sub">{u.building}</div>
+              </div>
+            </div>
+          ))}
+          {isOwner&&anniversaries.length>0&&page==="dashboard"&&anniversaries.map((a,i)=>(
+            <div key={i} className="alert-banner">
+              <div className="al-icon">{a.type==="expiring"?"⚠️":"🎂"}</div>
+              <div>
+                <div className="al-title">
+                  {a.type==="ipc"&&`${t.contractAnniversary} · ${a.tenant.name}`}
+                  {a.type==="signed_today"&&`📝 ${a.tenant.name}`}
+                  {a.type==="expiring"&&`${t.contractExpires} · ${a.tenant.name}`}
+                </div>
+                <div className="al-sub">
+                  {a.type==="ipc"&&`Lleva ${a.years} año/s · Revisa el IPC · Contrato desde ${a.tenant.contractStart}`}
+                  {a.type==="signed_today"&&`${t.contractSigned} ${a.tenant.contractStart}`}
+                  {a.type==="expiring"&&`${a.tenant.contractEnd} · ${a.daysLeft} días restantes`}
+                </div>
+              </div>
+              {a.type==="expiring"&&(
+                <button className="btn btn-p btn-sm" style={{marginLeft:"auto",flexShrink:0}} onClick={()=>setModal({type:"renew-contract",tenantId:a.tenant.id})}>🔄 Renovar</button>
+              )}
+            </div>
+          ))}
+          {renderPage()}
+        </main>
+      </div>
+      {modal&&<div className="overlay" onClick={e=>e.target===e.currentTarget&&setModal(null)}>{renderModal()}</div>}
+      {toast&&<div className="toast">{toast}</div>}
+    </>
+  );
+}
+
+function PropertySelector({user,properties,onSelect,onCreateProp,onUpdateProp,onDeleteProp}){
+  const [creating,setCreating]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [name,setName]=useState("");
+  const [buildings,setBuildings]=useState([""]);
+  const [editName,setEditName]=useState("");
+  const [editBuildings,setEditBuildings]=useState([]);
+
+  const handleCreate=async()=>{
+    if(!name.trim())return;
+    await onCreateProp(name.trim(),buildings.filter(b=>b.trim()));
+    setCreating(false);setName("");setBuildings([""]);
+  };
+  const handleEdit=(p,e)=>{e.stopPropagation();setEditing(p);setEditName(p.name);setEditBuildings([...(p.buildings||[])]);};
+  const handleSaveEdit=async()=>{
+    await onUpdateProp(editing.id,editName.trim(),editBuildings.filter(b=>b.trim()));
+    setEditing(null);
+  };
+  const addB=()=>setBuildings(b=>[...b,""]);
+  const setB=(i,v)=>setBuildings(b=>b.map((x,j)=>j===i?v:x));
+  const remB=(i)=>setBuildings(b=>b.filter((_,j)=>j!==i));
+  const addEB=()=>setEditBuildings(b=>[...b,""]);
+  const setEB=(i,v)=>setEditBuildings(b=>b.map((x,j)=>j===i?v:x));
+  const remEB=(i)=>setEditBuildings(b=>b.filter((_,j)=>j!==i));
+  const colors=["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"];
+  const iS={width:"100%",background:"#1A1612",border:"1px solid #3A2E28",borderRadius:8,padding:"8px 12px",color:"#F5EFE8",fontFamily:"'DM Sans',sans-serif",fontSize:13,boxSizing:"border-box"};
+
+  return(
+    <div style={{minHeight:"100vh",background:"#1A1612",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:36,color:"#F5EFE8",marginBottom:6}}>Mi<span style={{color:"#C4622D",fontStyle:"italic"}}>Alquiler</span></div>
+      <div style={{color:"#8C7B6E",fontSize:14,marginBottom:32}}>Selecciona una propiedad para continuar</div>
+      <div style={{width:"100%",maxWidth:500}}>
+        {properties.length>0&&<>
+          <div style={{color:"#8C7B6E",fontSize:12,textTransform:"uppercase",letterSpacing:".7px",marginBottom:12}}>Tus propiedades</div>
+          {properties.map((p,i)=>(
+            editing?.id===p.id
+            ?<div key={p.id} style={{background:"#261F1B",border:"1px solid #C4622D",borderRadius:14,padding:20,marginBottom:10}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:"#F5EFE8",marginBottom:12}}>✏️ Editar propiedad</div>
+              <div style={{marginBottom:10}}>
+                <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Nombre</label>
+                <input value={editName} onChange={e=>setEditName(e.target.value)} style={iS}/>
+              </div>
+              <div style={{marginBottom:10}}>
+                <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Naves / Edificios</label>
+                {editBuildings.map((b,j)=>(
+                  <div key={j} style={{display:"flex",gap:6,marginBottom:6}}>
+                    <input value={b} onChange={e=>setEB(j,e.target.value)} placeholder={"Nave "+(j+1)} style={iS}/>
+                    <button onClick={()=>remEB(j)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:18}}>✕</button>
+                  </div>
+                ))}
+                <button onClick={addEB} style={{background:"none",border:"none",color:"#C4622D",cursor:"pointer",fontSize:13,padding:0}}>+ Añadir nave</button>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:12}}>
+                <button onClick={()=>setEditing(null)} style={{flex:1,background:"none",border:"1px solid #3A2E28",borderRadius:10,padding:"10px",color:"#8C7B6E",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Cancelar</button>
+                <button onClick={handleSaveEdit} disabled={!editName.trim()} style={{flex:2,background:"#C4622D",border:"none",borderRadius:10,padding:"10px",color:"white",cursor:"pointer",fontWeight:600,fontFamily:"'DM Sans',sans-serif"}}>💾 Guardar</button>
+              </div>
+            </div>
+            :<div key={p.id} style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:"16px 20px",marginBottom:10,display:"flex",alignItems:"center",gap:14}}>
+              <div onClick={()=>onSelect(p)} style={{width:44,height:44,borderRadius:12,background:colors[i%colors.length],display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0,cursor:"pointer"}}>🏢</div>
+              <div onClick={()=>onSelect(p)} style={{flex:1,cursor:"pointer"}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8"}}>{p.name}</div>
+                {p.buildings?.filter(b=>b).length>0&&<div style={{fontSize:12,color:"#8C7B6E",marginTop:2}}>{p.buildings.filter(b=>b).join(" · ")}</div>}
+              </div>
+              <button onClick={e=>handleEdit(p,e)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:15,padding:"4px 6px"}} title="Editar">✏️</button>
+              <button onClick={e=>{e.stopPropagation();if(window.confirm("¿Eliminar '"+p.name+"'? Los inquilinos no se borrarán."))onDeleteProp(p.id);}} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:15,padding:"4px 6px"}} title="Eliminar">🗑️</button>
+              <div onClick={()=>onSelect(p)} style={{color:"#C4622D",fontSize:20,cursor:"pointer"}}>›</div>
+            </div>
+          ))}
+          <div style={{height:16}}/>
+        </>}
+        {!creating
+          ?<button onClick={()=>setCreating(true)} style={{width:"100%",background:"none",border:"2px dashed #3A2E28",borderRadius:14,padding:"16px",color:"#8C7B6E",cursor:"pointer",fontSize:14,fontFamily:"'DM Sans',sans-serif"}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor="#C4622D";e.currentTarget.style.color="#F5EFE8";}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor="#3A2E28";e.currentTarget.style.color="#8C7B6E";}}>
+            ➕ Añadir nueva propiedad
+          </button>
+          :<div style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:20}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8",marginBottom:16}}>Nueva propiedad</div>
+            <div style={{marginBottom:12}}>
+              <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Nombre de la propiedad</label>
+              <input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: Calafell, Barcelona..." style={{...iS,padding:"10px 12px"}}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Naves / Edificios (opcional)</label>
+              {buildings.map((b,i)=>(
+                <div key={i} style={{display:"flex",gap:6,marginBottom:6}}>
+                  <input value={b} onChange={e=>setB(i,e.target.value)} placeholder={"Nave "+(i+1)} style={iS}/>
+                  {buildings.length>1&&<button onClick={()=>remB(i)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:18}}>✕</button>}
+                </div>
+              ))}
+              <button onClick={addB} style={{background:"none",border:"none",color:"#C4622D",cursor:"pointer",fontSize:13,padding:0}}>+ Añadir nave</button>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:16}}>
+              <button onClick={()=>setCreating(false)} style={{flex:1,background:"none",border:"1px solid #3A2E28",borderRadius:10,padding:"10px",color:"#8C7B6E",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Cancelar</button>
+              <button onClick={handleCreate} disabled={!name.trim()} style={{flex:2,background:"#C4622D",border:"none",borderRadius:10,padding:"10px",color:"white",cursor:"pointer",fontWeight:600,fontFamily:"'DM Sans',sans-serif",opacity:name.trim()?1:.5}}>Crear propiedad</button>
+            </div>
+          </div>}
+      </div>
+    </div>
+  );
+}
+
+function LangSelect({onSelect}){
+  return(
+    <div className="lang-screen">
+      <h1 className="lang-title">Mi<em>Alquiler</em></h1>
+      <div className="lang-cards">
+        {[{code:"es",flag:"🇪🇸",label:"Español"},{code:"en",flag:"🇬🇧",label:"English"},{code:"ar",flag:"🇸🇦",label:"العربية"}].map(l=>(
+          <div key={l.code} className="lang-card" onClick={()=>onSelect(l.code)}>
+            <div className="flag">{l.flag}</div><p>{l.label}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({t,onLogin}){
+  const [email,setEmail]=useState("");const [pass,setPass]=useState("");
+  const [err,setErr]=useState("");const [loading,setLoading]=useState(false);
+  const handle=async()=>{
+    setErr("");setLoading(true);
+    try{
+      const cred=await signInWithEmailAndPassword(auth,email,pass);
+      window._ownerPass=pass;
+      const snap=await getDoc(doc(db,"users",cred.user.uid));
+      if(snap.exists())onLogin(cred.user,snap.data());
+    }catch{setErr(t.wrongCredentials);}
+    setLoading(false);
+  };
+  return(
+    <div className="login-wrap"><div className="login-box">
+      <h2>{t.loginTitle}</h2><p>MiAlquiler · {t.owner} / {t.tenant}</p>
+      {err&&<div className="login-err">{err}</div>}
+      <div className="fg"><label>{t.email}</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()}/></div>
+      <div className="fg"><label>{t.password}</label><input type="password" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()}/></div>
+      <button className="btn btn-p btn-full" onClick={handle} disabled={loading}>{loading?"...":t.login}</button>
+    </div></div>
+  );
+}
+
+function Dashboard({t,tenants,onSelect}){
+  const totalRent=tenants.reduce((s,t2)=>s+(t2.rent||0),0);
+  const currentMonth=new Date().toLocaleString("es-ES",{month:"long",year:"numeric"});
+  const paidCount=tenants.filter(t2=>Object.values(t2.payments||{}).some(p=>p.paid)).length;
+  const pendingMaint=tenants.reduce((s,t2)=>s+(t2.maintenance||[]).filter(m=>m.status==="Pendiente").length,0);
+  const allMaint=tenants.flatMap(t2=>(t2.maintenance||[]).map(m=>({...m,tenant:t2}))).slice(0,4);
+  return(
+    <div>
+      <div className="page-hd"><h2>{t.hello} 👋</h2><p>{currentMonth}</p></div>
+      <div className="stats">
+        <div className="stat tl"><div className="lbl">{t.incomeMonth}</div><div className="val">{totalRent}€</div></div>
+        <div className="stat sl"><div className="lbl">{t.paidCount}</div><div className="val">{paidCount}/{tenants.length}</div></div>
+        <div className="stat gl"><div className="lbl">{t.activeTenants}</div><div className="val">{tenants.length}</div></div>
+        <div className="stat rl"><div className="lbl">{t.pendingMaint}</div><div className="val">{pendingMaint}</div></div>
+      </div>
+      <div className="g2">
+        <div className="card">
+          <div className="card-title">👥 {t.tenants}</div>
+          {tenants.length===0?<p style={{color:"var(--warm)",fontSize:14}}>{t.noTenants}</p>:
+            tenants.slice(0,4).map(ten=>(
+              <div key={ten.id} className="t-row" onClick={()=>onSelect(ten.id)}>
+                <div className="av av-md" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
+                <div className="t-info"><strong>{ten.name}</strong><span>{ten.unit}</span></div>
+                <span style={{color:"var(--warm)",fontSize:18}}>›</span>
+              </div>
+            ))}
+        </div>
+        <div className="card">
+          <div className="card-title">🔧 {t.recentIncidents}</div>
+          {allMaint.length===0?<p style={{color:"var(--warm)",fontSize:14}}>🎉 Sin incidencias</p>:
+            allMaint.map(m=>(
+              <div key={m.id} className="mi">
+                <div className="mi-icon">{maintIcons[m.type]||"🔧"}</div>
+                <div className="mi-info"><strong>{m.type}</strong><div className="meta">{m.tenant.name} · {m.date}</div><p>{m.desc}</p></div>
+                <StatusBadge status={m.status} t={t}/>
+              </div>
+            ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Tenants({t,tenants,onSelect,onNew,onEdit,onDelete,buildings=[]}){
+  buildings=buildings.filter(b=>b);
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const groups={};
+  buildings.forEach(b=>groups[b]=[]);
+  groups["Sin nave asignada"]=[];
+  tenants.forEach(ten=>{
+    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave asignada";
+    groups[b].push(ten);
+  });
+  const allGroups=[...buildings,"Sin nave asignada"].filter(b=>groups[b].length>0);
+  const [openBuilding,setOpenBuilding]=useState(allGroups[0]||null);
+  const [verTodo,setVerTodo]=useState(false);
+
+  const TenantRow=({ten})=>(
+    <div className="t-row">
+      <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
+      <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
+        <strong>{ten.name}</strong>
+        <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
+      </div>
+      <div style={{textAlign:"right",marginRight:8}}>
+        <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
+      </div>
+      <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
+      <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
+      <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDelete(ten.id)}>🗑️</button>
+    </div>
+  );
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>{t.tenants}</h2><p>{tenants.length} {t.activeTenants.toLowerCase()}</p></div>
+        <div style={{display:"flex",gap:8}}>
+          <button className={`btn btn-sm ${verTodo?"btn-p":"btn-o"}`} onClick={()=>setVerTodo(v=>!v)}>
+            {verTodo?"🏢 Por naves":"🌐 Ver todo"}
+          </button>
+          <button className="btn btn-p" onClick={onNew}>➕ {t.newTenant}</button>
+        </div>
+      </div>
+
+      {tenants.length===0
+        ?<div className="card"><p style={{color:"var(--warm)",fontSize:14,textAlign:"center",padding:20}}>{t.noTenants}</p></div>
+        :verTodo
+          ?<div style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+            <div style={{background:"var(--terra)",color:"white",padding:"12px 16px"}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🌐 Todos los inquilinos</div>
+              <div style={{fontSize:12,opacity:.85,marginTop:2}}>{tenants.length} inquilinos · {tenants.reduce((s,ten)=>s+(ten.rent||0),0)}€/mes</div>
+            </div>
+            <div style={{padding:"0 4px",background:"white"}}>
+              {tenants.map(ten=>(
+                <div key={ten.id} className="t-row">
+                  <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
+                  <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
+                    <strong>{ten.name}</strong>
+                    <span style={{fontSize:10,color:getBuildingColor(ten.building||""),fontWeight:600}}>{ten.building||"Sin nave"}</span>
+                    <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
+                  </div>
+                  <div style={{textAlign:"right",marginRight:8}}>
+                    <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
+                  </div>
+                  <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
+                  <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
+                </div>
+              ))}
+            </div>
+          </div>
+          :allGroups.map(building=>{
+            const isOpen=openBuilding===building;
+            const totalRent=groups[building].reduce((s,ten)=>s+(ten.rent||0),0);
+            return(
+              <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <div style={{background:getBuildingColor(building),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:building)}>
+                  <div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {building}</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{groups[building].length} inquilino{groups[building].length!==1?"s":""} · {totalRent}€/mes</div>
+                  </div>
+                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
+                </div>
+                {isOpen&&(
+                  <div style={{padding:"0 4px",background:"white"}}>
+                    {groups[building].map(ten=><TenantRow key={ten.id} ten={ten}/>)}
+                  </div>
+                )}
+              </div>
+            );
+          })
+      }
+    </div>
+  );
+}
+
+function Finances(props){
+  const {t,tenants,onToggle,onAddCost,onDeleteCost}=props;
+  const now=new Date();
+  const startYear=2024; const endYear=startYear+15;
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const allMonths=[];
+  for(let y=startYear;y<endYear;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
+
+  const [selYear,setSelYear]=useState(now.getFullYear());
+  const [tab,setTab]=useState("pagos"); // pagos | gastos | graficos
+  const [openBuilding,setOpenBuilding]=useState(null);
+  const [verTodo,setVerTodo]=useState(false);
+  const years=Array.from({length:15},(_,i)=>startYear+i);
+  const monthsOfYear=monthNames.map(m=>`${m} ${selYear}`);
+  const buildings=(props.buildings||[]).filter(b=>b);
+  const getTenantsByBuilding=(b)=>tenants.filter(t=>t.building===b);
+  const getBuildingColor=(_,i)=>["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"][i%7];
+
+  // Chart data for selected year
+  const chartData=monthsOfYear.map(m=>{
+    const ingresos=tenants.filter(ten=>(ten.payments||{})[m]?.paid).reduce((s,ten)=>s+(ten.rent||0),0);
+    const gastos=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const inversion=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const profit=ingresos-gastos-inversion;
+    return{name:m.split(" ")[0].slice(0,3),Ingresos:ingresos,Gastos:gastos,Inversión:inversion,Profit:profit};
+  });
+
+  // Yearly totals
+  const totalIngresos=chartData.reduce((s,d)=>s+d.Ingresos,0);
+  const totalGastos=chartData.reduce((s,d)=>s+d.Gastos,0);
+  const totalInversion=chartData.reduce((s,d)=>s+d.Inversión,0);
+  const totalProfit=totalIngresos-totalGastos-totalInversion;
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
+        <h2>{t.finances}</h2>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <select className="status-sel" style={{padding:"8px 12px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
+            {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {["pagos","gastos","graficos"].map(tb=>(
+            <button key={tb} className={`chat-tab${tab===tb?" active":""}`} onClick={()=>setTab(tb)}>
+              {tb==="pagos"?"💶 Pagos":tb==="gastos"?"⚡ Gastos":"📊 Gráficos"}
+            </button>
+          ))}
+        </div>
+        {(tab==="pagos"||tab==="gastos")&&(
+          <button className={`btn btn-sm ${verTodo?"btn-p":"btn-o"}`} onClick={()=>setVerTodo(v=>!v)}>
+            {verTodo?"🏢 Por naves":"🌐 Ver todo"}
+          </button>
+        )}
+      </div>
+
+      {/* RESUMEN ANUAL */}
+      <div className="stats" style={{marginBottom:20}}>
+        <div className="stat sl"><div className="lbl">Ingresos {selYear}</div><div className="val">{totalIngresos}€</div></div>
+        <div className="stat rl"><div className="lbl">Gastos {selYear}</div><div className="val">{totalGastos}€</div></div>
+        <div className="stat gl"><div className="lbl">Inversión {selYear}</div><div className="val">{totalInversion}€</div></div>
+        <div className="stat tl"><div className="lbl">Profit {selYear}</div><div className="val" style={{color:totalProfit>=0?"var(--green)":"var(--red)"}}>{totalProfit}€</div></div>
+      </div>
+
+      {/* TAB PAGOS */}
+      {tab==="pagos"&&verTodo&&(
+        <div className="card">
+          <div className="card-title">💶 {t.paymentHistory} · {selYear} — Todas las naves</div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
+              <tbody>
+                {tenants.map(ten=>(
+                  <tr key={ten.id}>
+                    <td><strong>{ten.name}</strong></td>
+                    <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
+                    <td>{ten.unit}</td><td>{ten.rent}€</td>
+                    {monthsOfYear.map(m=>{
+                      const p=(ten.payments||{})[m];
+                      return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {tab==="pagos"&&!verTodo&&(
+        <div>
+          {buildings.map(b=>{
+            const bTenants=getTenantsByBuilding(b);
+            if(bTenants.length===0)return null;
+            const isOpen=openBuilding===b;
+            const totalRent=bTenants.reduce((s,t)=>s+(t.rent||0),0);
+            const paidThisMonth=bTenants.filter(t=>{const m=monthsOfYear[now.getMonth()];return(t.payments||{})[m]?.paid;}).length;
+            return(
+              <div key={b} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:b)}>
+                  <div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bTenants.length} inquilinos · {totalRent}€/mes · {paidThisMonth}/{bTenants.length} pagados</div>
+                  </div>
+                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
+                </div>
+                {isOpen&&(
+                  <div style={{padding:8,background:"white"}}>
+                    <div className="tbl-wrap">
+                      <table>
+                        <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
+                        <tbody>
+                          {bTenants.map(ten=>(
+                            <tr key={ten.id}>
+                              <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
+                              {monthsOfYear.map(m=>{
+                                const p=(ten.payments||{})[m];
+                                return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* TAB GASTOS */}
+      {tab==="gastos"&&verTodo&&(
+        <div className="card">
+          <div className="card-title">⚡ {t.costBreakdown} · {selYear} — Todas las naves</div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
+              <tbody>
+                {tenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>(
+                  <tr key={c.id}>
+                    <td>{ten.name}</td>
+                    <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
+                    <td><div>{c.icon} {c.name}</div>{c.nota&&<div style={{fontSize:11,color:"var(--warm)"}}>📝 {c.nota}</div>}</td>
+                    <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>{c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}</span></td>
+                    <td>{c.month}</td><td>{c.amount}€</td>
+                    <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(ten.id,c.id)}>🗑️</button></td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+        </div>
+      )}
+      {tab==="gastos"&&!verTodo&&(
+        <div>
+          {buildings.map(b=>{
+            const bTenants=getTenantsByBuilding(b);
+            const bCosts=bTenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>({...c,tenantName:ten.name,tenantId:ten.id})));
+            if(bTenants.length===0)return null;
+            const isOpen=openBuilding===("g_"+b);
+            const totalCosts=bCosts.reduce((s,c)=>s+(c.amount||0),0);
+            return(
+              <div key={b} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:"g_"+b)}>
+                  <div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bCosts.length} gastos · Total: {totalCosts}€</div>
+                  </div>
+                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
+                </div>
+                {isOpen&&(
+                  <div style={{padding:8,background:"white"}}>
+                    {bCosts.length===0
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:12}}>No hay gastos en {selYear}</p>
+                      :<div className="tbl-wrap">
+                        <table>
+                          <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
+                          <tbody>
+                            {bCosts.map(c=>(
+                              <tr key={c.id}>
+                                <td>{c.tenantName}</td>
+                                <td>
+                                  <div>{c.icon} {c.name}</div>
+                                  {c.nota&&<div style={{fontSize:11,color:"var(--warm)",marginTop:2}}>📝 {c.nota}</div>}
+                                </td>
+                                <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>
+                                  {c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}
+                                </span></td>
+                                <td>{c.month}</td>
+                                <td>{c.amount}€</td>
+                                <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(c.tenantId,c.id)}>🗑️</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+        </div>
+      )}
+
+      {/* TAB GRAFICOS */}
+      {tab==="graficos"&&(
+        <div className="card">
+          <div className="card-title">📊 Gráfico anual · {selYear}</div>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={chartData} margin={{top:8,right:8,left:0,bottom:0}}>
+              <XAxis dataKey="name" tick={{fontSize:11}}/>
+              <YAxis tick={{fontSize:11}} unit="€"/>
+              <Tooltip formatter={v=>v+"€"}/>
+              <Legend/>
+              <Bar dataKey="Ingresos" fill="#7A9E7E" radius={[4,4,0,0]}/>
+              <Bar dataKey="Gastos" fill="#D94F3D" radius={[4,4,0,0]}/>
+              <Bar dataKey="Inversión" fill="#4F46E5" radius={[4,4,0,0]}/>
+              <Bar dataKey="Profit" fill="#C4622D" radius={[4,4,0,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+          <div style={{marginTop:16,display:"flex",flexDirection:"column",gap:8}}>
+            {chartData.filter(d=>d.Ingresos>0||d.Gastos>0||d.Inversión>0).map(d=>(
+              <div key={d.name} style={{display:"flex",justifyContent:"space-between",padding:"8px 12px",background:"var(--cream)",borderRadius:10,fontSize:13}}>
+                <span style={{fontWeight:600,width:40}}>{d.name}</span>
+                <span style={{color:"var(--green)"}}>🟢 {d.Ingresos}€</span>
+                <span style={{color:"var(--red)"}}>🔴 {d.Gastos}€</span>
+                <span style={{color:"#4F46E5"}}>🏗️ {d.Inversión}€</span>
+                <span style={{fontWeight:600,color:d.Profit>=0?"var(--green)":"var(--red)"}}>{d.Profit>=0?"✅":"⚠️"} {d.Profit}€</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Maintenance({t,tenants,onStatus}){
+  const all=tenants.flatMap(ten=>(ten.maintenance||[]).map(m=>({...m,tenant:ten})));
+  return(
+    <div>
+      <div className="page-hd"><h2>{t.maintenance}</h2></div>
+      {all.length===0?<div className="card"><p style={{color:"var(--warm)",textAlign:"center",padding:20}}>🎉 {t.noIncidents}</p></div>:
+        all.map(m=>(
+          <div key={m.id} className="mi">
+            <div className="mi-icon">{maintIcons[m.type]||"🔧"}</div>
+            <div className="mi-info"><strong>{m.type}</strong><div className="meta">{m.tenant.name} · {m.tenant.unit} · {m.date}</div><p>{m.desc}</p></div>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>
+              <StatusBadge status={m.status} t={t}/>
+              <select className="status-sel" value={m.status} onChange={e=>onStatus(m.tenant.id,m.id,e.target.value)}>
+                <option>Pendiente</option><option>En revisión</option><option>Resuelto</option>
+              </select>
+            </div>
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function CalendarPage({t,tenants}){
+  const now=new Date();
+  const [year,setYear]=useState(now.getFullYear());
+  const [month,setMonth]=useState(now.getMonth());
+  const [selected,setSelected]=useState(null);
+  const daysInMonth=new Date(year,month+1,0).getDate();
+  const firstDay=new Date(year,month,1).getDay();
+  const isCurrentMonth=now.getMonth()===month&&now.getFullYear()===year;
+  const monthName=new Date(year,month,1).toLocaleString("es-ES",{month:"long",year:"numeric"});
+  const events={};
+  tenants.forEach(ten=>{
+    if(ten.contractStart){
+      const d=new Date(ten.contractStart);
+      if(d.getMonth()===month){
+        const day=d.getDate();
+        if(!events[day])events[day]=[];
+        events[day].push({name:ten.name,type:d.getFullYear()===year?"start":"anniversary"});
+      }
+    }
+    if(ten.contractEnd){
+      const d=new Date(ten.contractEnd);
+      if(d.getMonth()===month&&d.getFullYear()===year){
+        const day=d.getDate();
+        if(!events[day])events[day]=[];
+        events[day].push({name:ten.name,type:"end"});
+      }
+    }
+  });
+  const dayNames=["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
+  const prevMonth=()=>{if(month===0){setMonth(11);setYear(y=>y-1);}else setMonth(m=>m-1);setSelected(null);};
+  const nextMonth=()=>{if(month===11){setMonth(0);setYear(y=>y+1);}else setMonth(m=>m+1);setSelected(null);};
+  const offset=firstDay===0?6:firstDay-1;
+  return(
+    <div>
+      <div className="page-hd"><h2>📅 {t.calendar}</h2></div>
+      <div className="card">
+        <div className="cal-nav">
+          <button onClick={prevMonth}>‹</button>
+          <strong style={{fontFamily:"'DM Serif Display',serif",fontSize:18,textTransform:"capitalize"}}>{monthName}</strong>
+          <button onClick={nextMonth}>›</button>
+        </div>
+        <div className="cal-grid">
+          {dayNames.map(d=><div key={d} className="cal-day-name">{d}</div>)}
+          {Array(offset).fill(null).map((_,i)=><div key={"e"+i} className="cal-day empty"/>)}
+          {Array.from({length:daysInMonth},(_,i)=>i+1).map(day=>{
+            const ev=events[day];
+            const hasEnd=ev?.some(e=>e.type==="end");
+            const isToday=isCurrentMonth&&day===now.getDate();
+            return(
+              <div key={day}
+                className={`cal-day ${isToday?"today-day":hasEnd?"has-expiry":ev?"has-event":"normal"}`}
+                onClick={()=>setSelected(ev?day:null)}>
+                {day}
+                {ev&&!isToday&&<div className="cal-event-dot" style={{background:hasEnd?"var(--red)":"var(--gold)"}}/>}
+              </div>
+            );
+          })}
+        </div>
+        <div className="cal-legend">
+          <div className="cal-legend-item"><div className="cal-legend-dot" style={{background:"var(--terra)"}}/> Hoy</div>
+          <div className="cal-legend-item"><div className="cal-legend-dot" style={{background:"var(--gold)"}}/> Inicio/Aniversario</div>
+          <div className="cal-legend-item"><div className="cal-legend-dot" style={{background:"var(--red)"}}/> Fin contrato</div>
+        </div>
+        {selected&&events[selected]&&(
+          <div style={{marginTop:16,padding:16,background:"var(--cream)",borderRadius:12}}>
+            <div style={{fontWeight:600,marginBottom:8}}>📅 {selected} de {new Date(year,month,1).toLocaleString("es-ES",{month:"long"})}</div>
+            {events[selected].map((e,i)=>(
+              <div key={i} style={{fontSize:14,marginBottom:4}}>
+                {e.type==="start"&&`🟢 ${e.name} — Inicio de contrato`}
+                {e.type==="anniversary"&&`📈 ${e.name} — Subida IPC`}
+                {e.type==="end"&&`🔴 ${e.name} — Fin de contrato`}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="card">
+        <div className="card-title">📋 Contratos</div>
+        {tenants.length===0?<p style={{color:"var(--warm)",fontSize:14}}>{t.noTenants}</p>:
+          tenants.map(ten=>(
+            <div key={ten.id} className="contract-card">
+              <strong>{ten.name} · {ten.unit}</strong>
+              <div className="contract-dates">
+                <div className="contract-date-item">{t.contractStart}: <span>{ten.contractStart||"—"}</span></div>
+                <div className="contract-date-item">{t.contractEnd}: <span>{ten.contractEnd||"—"}</span></div>
+                <div className="contract-date-item">{t.rent}: <span>{ten.rent}€/mes</span></div>
+              </div>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function OwnerMessages({t,tenants,ownerId}){
+  const [activeTenant,setActiveTenant]=useState(tenants[0]?.id||null);
+  useEffect(()=>{if(!activeTenant&&tenants.length>0)setActiveTenant(tenants[0].id);},[tenants]);
+  if(tenants.length===0)return<div className="page-hd"><h2>{t.messages}</h2><p style={{color:"var(--warm)"}}>{t.noTenants}</p></div>;
+  return(
+    <div>
+      <div className="page-hd"><h2>{t.messages}</h2></div>
+      <div className="chat-tabs">
+        {tenants.map(ten=>(<button key={ten.id} className={`chat-tab ${activeTenant===ten.id?"active":""}`} onClick={()=>setActiveTenant(ten.id)}>{ten.name.split(" ")[0]}</button>))}
+      </div>
+      {activeTenant&&<ChatWindow roomId={[ownerId,activeTenant].sort().join("_")} senderId={ownerId} t={t}/>}
+    </div>
+  );
+}
+
+function TenantMessages({t,tenantId}){
+  const [ownerId,setOwnerId]=useState(null);
+  useEffect(()=>{const q=query(collection(db,"users"),where("role","==","owner"));onSnapshot(q,snap=>{if(!snap.empty)setOwnerId(snap.docs[0].id);});},[]);
+  if(!ownerId)return<div className="page-hd"><h2>{t.messages}</h2></div>;
+  return(<div><div className="page-hd"><h2>{t.messages}</h2></div><ChatWindow roomId={[ownerId,tenantId].sort().join("_")} senderId={tenantId} t={t}/></div>);
+}
+
+function ChatWindow({roomId,senderId,t}){
+  const [messages,setMessages]=useState([]);const [text,setText]=useState("");const bottomRef=useRef(null);
+  useEffect(()=>{const q=query(collection(db,"chats",roomId,"messages"),orderBy("createdAt"));const unsub=onSnapshot(q,snap=>{setMessages(snap.docs.map(d=>({id:d.id,...d.data()})));});return unsub;},[roomId]);
+  useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:"smooth"});},[messages]);
+  const sendMsg=async()=>{if(!text.trim())return;await addDoc(collection(db,"chats",roomId,"messages"),{text:text.trim(),senderId,createdAt:serverTimestamp()});setText("");};
+  return(
+    <div className="chat-wrap">
+      <div className="chat-messages">
+        {messages.length===0&&<p style={{color:"var(--warm)",fontSize:14,textAlign:"center",margin:"auto"}}>{t.noMessages}</p>}
+        {messages.map(m=>(<div key={m.id} className={`msg ${m.senderId===senderId?"mine":"theirs"}`}>{m.text}<div className="msg-meta">{m.createdAt?.toDate?.()?.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div></div>))}
+        <div ref={bottomRef}/>
+      </div>
+      <div className="chat-input">
+        <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMsg()} placeholder={t.typeMsg}/>
+        <button className="btn btn-p" onClick={sendMsg}>↑</button>
+      </div>
+    </div>
+  );
+}
+
+function TenantHome({t,profile}){
+  if(!profile)return null;
+  const months=Object.keys(profile.payments||{});
+  const current=months[months.length-1]||"";
+  const p=(profile.payments||{})[current]||{paid:false};
+  return(
+    <div>
+      <div className="page-hd"><h2>{t.hello}, {profile.name?.split(" ")[0]} 👋</h2><p>{profile.unit}</p></div>
+      <div className="pay-box" style={p.paid?{background:"linear-gradient(135deg,#E6F4ED,#D0EBDA)",border:"2px solid #4A9B6F"}:{background:"linear-gradient(135deg,#FDECEA,#FAD8D5)",border:"2px solid #D94F3D"}}>
+        <div className="sico">{p.paid?"✅":"⚠️"}</div>
+        <h3>{p.paid?`${t.paid} ✓`:t.pending}</h3>
+        <div className="amount">{profile.rent}€</div>
+        <p>{p.paid?`${t.registered} ${p.date}`:`${t.dueThisMonth} · ${current}`}</p>
+      </div>
+      <div className="card">
+        <div className="card-title">📋 {t.paymentHistory}</div>
+        {months.length===0?<p style={{color:"var(--warm)",fontSize:14}}>{t.pending}</p>:
+          months.map(m=>{const pm=(profile.payments||{})[m];return(<div key={m} className="cr"><div className="cn">{m}</div><span className="badge" style={pm.paid?{background:"#E6F4ED",color:"#4A9B6F"}:{background:"#FDECEA",color:"#D94F3D"}}>{pm.paid?`✓ ${pm.date}`:"✗ Pendiente"}</span></div>);})}
+      </div>
+    </div>
+  );
+}
+
+function TenantCosts({t,profile}){
+  const costs=profile?.costs||[];
+  const total=costs.reduce((s,c)=>s+(c.amount||0),0);
+  return(
+    <div>
+      <div className="page-hd"><h2>{t.myCosts}</h2></div>
+      <div className="stats">
+        <div className="stat gl"><div className="lbl">{t.totalCosts}</div><div className="val">{total}€</div></div>
+        <div className="stat tl"><div className="lbl">{t.monthlyRent}</div><div className="val">{profile?.rent}€</div></div>
+      </div>
+      <div className="card">
+        <div className="card-title">⚡ {t.costBreakdown}</div>
+        {costs.length===0?<p style={{color:"var(--warm)",fontSize:14}}>{t.noCosts}</p>:
+          costs.map(c=>(<div key={c.id} className="cr"><div className="cn"><span style={{fontSize:20}}>{c.icon}</span><div><div>{c.name}</div><div style={{fontSize:12,color:"var(--warm)"}}>{c.month}</div></div></div><div className="ca">{c.amount}€</div></div>))}
+        {costs.length>0&&<><hr/><div className="cr"><div className="cn"><strong>Total</strong></div><div className="ca" style={{fontSize:18}}>{total}€</div></div></>}
+      </div>
+    </div>
+  );
+}
+
+function TenantMaintenance({t,profile,onSend}){
+  const [type,setType]=useState("Fontanería");const [desc,setDesc]=useState("");
+  const types=["Fontanería","Electricidad","Calefacción","Ventanas","Electrodomésticos","Otros"];
+  const handle=()=>{if(!desc.trim())return;onSend(type,desc.trim());setDesc("");};
+  return(
+    <div>
+      <div className="page-hd"><h2>{t.incidents}</h2></div>
+      <div className="card">
+        <div className="card-title">➕ {t.sendIncident}</div>
+        <div className="fg"><label>{t.incidentType}</label><select value={type} onChange={e=>setType(e.target.value)}>{types.map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.description}</label><textarea value={desc} onChange={e=>setDesc(e.target.value)} placeholder="..."/></div>
+        <button className="btn btn-s" onClick={handle}>📤 {t.sendIncident}</button>
+      </div>
+      <div className="card">
+        <div className="card-title">🕐 {t.incidents}</div>
+        {(profile?.maintenance||[]).length===0?<p style={{color:"var(--warm)",fontSize:14}}>{t.noIncidents}</p>:
+          (profile.maintenance||[]).map(m=>(<div key={m.id} className="mi"><div className="mi-icon">{maintIcons[m.type]||"🔧"}</div><div className="mi-info"><strong>{m.type}</strong><div className="meta">{m.date}</div><p>{m.desc}</p></div><StatusBadge status={m.status} t={t}/></div>))}
+      </div>
+    </div>
+  );
+}
+
+function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,onEdit,onUploadContract,contracts,onDelete,onUpdateField}){
+  const now=new Date();
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const startYear=2024;
+  const allMonths=[];
+  for(let y=startYear;y<startYear+15;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
+  const currentMonth=`${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+
+  const [costType,setCostType]=useState("💡 Electricidad");
+  const [costTipo,setCostTipo]=useState("gasto");
+  const [costAmt,setCostAmt]=useState("");
+  const [costMonth,setCostMonth]=useState(currentMonth);
+  const [costNota,setCostNota]=useState("");
+  const months=Object.keys(tenant?.payments||{});
+  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
+  if(!tenant)return null;
+  const handleAddCost=()=>{
+    if(!costAmt||!costMonth)return;
+    const icon=icons[costType]||"📋";const name=costType.replace(/^[^\s]+\s/,"");
+    onAddCost(tenant.id,{icon,name,month:costMonth,amount:parseFloat(costAmt),tipo:costTipo,nota:costNota});setCostAmt("");setCostNota("");
+  };
+  return(
+    <div className="modal">
+      <div className="modal-hd">
+        <h3>{tenant.name}</h3>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o btn-sm" onClick={onEdit}>✏️ {t.editData}</button>
+          <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={onDelete}>🗑️</button>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+      </div>
+      <div className="prof-hd">
+        <div className="av av-lg" style={{background:getColor(tenant.name)}}>{initials(tenant.name)}</div>
+        <div className="prof-hd-info"><h3>{tenant.name}</h3><p>{tenant.unit} · {t.joinedSince} {tenant.joined}</p></div>
+      </div>
+      <div className="prof-grid">
+        <div><div className="pf-lbl">{t.phone}</div><div className="pf-val">{tenant.phone}</div></div>
+        <div><div className="pf-lbl">{t.email}</div><div className="pf-val" style={{fontSize:12}}>{tenant.email}</div></div>
+        <div><div className="pf-lbl">{t.rent}</div><div className="pf-val">{tenant.rent}€/mes</div></div>
+        <div><div className="pf-lbl">{t.contractStart}</div><div className="pf-val">{tenant.contractStart||"—"}</div></div>
+        <div><div className="pf-lbl">{t.contractEnd}</div><div className="pf-val">{tenant.contractEnd||"—"}</div></div>
+        <div><div className="pf-lbl">📅 Frecuencia pago</div><div className="pf-val">{tenant.payFreq||"mensual"}</div></div>
+        <div><div className="pf-lbl">🔒 Fianza</div><div className="pf-val">{tenant.fianza==="si"?`✅ ${tenant.fianzaAmount||0}€`:"❌ No"}</div></div>
+        <div style={{gridColumn:"1/-1"}}>
+          <div className="pf-lbl">🧾 Tipo de documento</div>
+          <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+            <button className={`btn btn-sm ${(tenant.docType||"recibo")==="recibo"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","recibo")}>🧾 Recibo</button>
+            <button className={`btn btn-sm ${tenant.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","factura")}>🧾 Factura</button>
+            <button className={`btn btn-sm ${tenant.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","ambos")}>🧾 Ambos</button>
+          </div>
+          {tenant.docType==="ambos"&&(
+            <div style={{marginTop:8,background:"var(--cream)",borderRadius:10,padding:10,fontSize:13}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span style={{color:"var(--warm)"}}>Importe Recibo</span><strong>{tenant.rentRecibo||0}€</strong>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+                <span style={{color:"var(--warm)"}}>Importe Factura</span><strong>{tenant.rentFactura||0}€</strong>
+              </div>
+            </div>
+          )}
+        </div>
+        {tenant.notes&&<div style={{gridColumn:"1/-1"}}>
+          <div className="pf-lbl">📝 Notas</div>
+          <div className="pf-val" style={{fontSize:13,whiteSpace:"pre-wrap"}}>{tenant.notes}</div>
+        </div>}
+      </div>
+      <hr/>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>📝 Contratos</div>
+      {(contracts||[]).filter(c=>c.tenantUid===tenant.id).length===0
+        ?<p style={{fontSize:13,color:"var(--warm)",marginBottom:8}}>No hay contratos adjuntos</p>
+        :(contracts||[]).filter(c=>c.tenantUid===tenant.id).map(c=>(
+          <div key={c.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+            <span style={{fontSize:22}}>📄</span>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,fontSize:13}}>{c.unit||tenant.unit}</div>
+              <div style={{fontSize:11,color:"var(--warm)"}}>{c.startDay}/{c.startMonth}/{c.startYear} → {c.endDay}/{c.endMonth}/{c.endYear} · {c.rent}€/mes</div>
+            </div>
+            <button className="btn btn-o btn-sm" onClick={()=>generateContractDocx(c)}>📥</button>
+          </div>
+        ))}
+      <button className="btn btn-o" style={{marginBottom:16,marginTop:8}} onClick={onUploadContract}>➕ Adjuntar contrato</button>
+      <hr/>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>{t.paymentHistory}</div>
+      {months.map(m=>{const p=(tenant.payments||{})[m];return(<div key={m} className="cr"><div className="cn">{m}</div><div style={{display:"flex",alignItems:"center",gap:8}}><span className="badge" style={p.paid?{background:"#E6F4ED",color:"#4A9B6F"}:{background:"#FDECEA",color:"#D94F3D"}}>{p.paid?`✓ ${p.date}`:"✗ Pendiente"}</span><button className="btn btn-o btn-sm" onClick={()=>onToggle(tenant.id,m)}>{p.paid?t.revert:t.markPaid}</button></div></div>);})}
+      <hr/>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>⚡ Costes registrados</div>
+      {(tenant.costs||[]).length===0
+        ?<p style={{fontSize:13,color:"var(--warm)",marginBottom:12}}>{t.noCosts}</p>
+        :(tenant.costs||[]).map(c=>(
+          <div key={c.id} style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14}}>{c.icon} {c.name} · <strong>{c.amount}€</strong></div>
+              <div style={{fontSize:12,color:"var(--warm)"}}>{c.month} · {c.tipo==="inversion"?"🏗️ Inversión (tuya)":"💸 Gasto"}</div>
+              {c.nota&&<div style={{fontSize:12,color:"#555",marginTop:2}}>📝 {c.nota}</div>}
+            </div>
+            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)",marginLeft:8,flexShrink:0}} onClick={()=>onDeleteCost(tenant.id,c.id)}>🗑️</button>
+          </div>
+        ))}
+      <div style={{marginBottom:16}}/>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>➕ {t.addCost}</div>
+      <div className="fg">
+        <label>Tipo</label>
+        <div style={{display:"flex",gap:8,marginTop:4}}>
+          <button className={`btn btn-sm ${costTipo==="gasto"?"btn-p":"btn-o"}`} onClick={()=>setCostTipo("gasto")}>💸 Gasto</button>
+          <button className={`btn btn-sm ${costTipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setCostTipo("inversion")}>🏗️ Inversión (mía)</button>
+        </div>
+      </div>
+      <div className="gr2">
+        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.amount}</label><input type="number" value={costAmt} onChange={e=>setCostAmt(e.target.value)} placeholder="0"/></div>
+      </div>
+      <div className="fg"><label>{t.month}</label>
+        <select value={costMonth} onChange={e=>setCostMonth(e.target.value)}>
+          {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
+      <div className="fg"><label>📝 Nota (opcional)</label><textarea value={costNota} onChange={e=>setCostNota(e.target.value)} placeholder="Ej: Cambio de caldera..."/></div>
+      <button className="btn btn-p" onClick={handleAddCost}>➕ {t.addCost}</button>
+    </div>
+  );
+}
+
+function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
+  const [form,setForm]=useState({
+    name:tenant?.name||"",unit:tenant?.unit||"",phone:tenant?.phone||"",
+    rent:tenant?.rent||"",email:tenant?.email||"",
+    contractStart:tenant?.contractStart||"",contractEnd:tenant?.contractEnd||"",
+    building:tenant?.building||"",docType:tenant?.docType||"recibo",
+    payFreq:tenant?.payFreq||"mensual",fianza:tenant?.fianza||"no",
+    fianzaAmount:tenant?.fianzaAmount||"",notes:tenant?.notes||"",
+    rentRecibo:tenant?.rentRecibo||"",rentFactura:tenant?.rentFactura||"",
+    ipcEnabled:tenant?.ipcEnabled||"si"
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  if(!tenant)return null;
+  return(
+    <div className="modal">
+      <div className="modal-hd"><h3>✏️ {t.editTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
+      <div className="fg"><label>🏢 Nave / Edificio</label>
+        <select value={form.building} onChange={e=>set("building",e.target.value)}>
+          <option value="">— Sin nave asignada —</option>
+          {(propBuildings||[]).filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
+        </select>
+      </div>
+      <div className="gr2">
+        <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
+        <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+      </div>
+      <div className="gr2">
+        <div className="fg"><label>{t.rent}</label><input type="number" value={form.rent} onChange={e=>set("rent",parseFloat(e.target.value))}/></div>
+        <div className="fg"><label>{t.email}</label><input type="email" value={form.email} onChange={e=>set("email",e.target.value)}/></div>
+      </div>
+      <hr/>
+      <div className="gr2">
+        <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
+        <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
+      </div>
+      <div className="fg">
+        <label>🧾 Tipo de documento</label>
+        <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+          <button className={`btn btn-sm ${form.docType==="recibo"?"btn-p":"btn-o"}`} onClick={()=>set("docType","recibo")}>🧾 Recibo</button>
+          <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
+          <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
+        </div>
+        {form.docType==="ambos"&&(
+          <div style={{marginTop:10,background:"var(--cream)",borderRadius:10,padding:12}}>
+            <p style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Divide el importe entre recibo y factura:</p>
+            <div className="gr2">
+              <div className="fg"><label>Importe Recibo €</label><input type="number" placeholder="0" value={form.rentRecibo||""} onChange={e=>set("rentRecibo",e.target.value)}/></div>
+              <div className="fg"><label>Importe Factura €</label><input type="number" placeholder="0" value={form.rentFactura||""} onChange={e=>set("rentFactura",e.target.value)}/></div>
+            </div>
+            {form.rentRecibo&&form.rentFactura&&<p style={{fontSize:11,marginTop:4,color:"var(--sage)",fontWeight:600}}>Total: {(parseFloat(form.rentRecibo||0)+parseFloat(form.rentFactura||0))}€</p>}
+          </div>
+        )}
+      </div>
+      <div className="fg">
+        <label>📅 Frecuencia de pago</label>
+        <select value={form.payFreq} onChange={e=>set("payFreq",e.target.value)}>
+          <option value="mensual">Mensual</option>
+          <option value="2meses">Cada 2 meses</option>
+          <option value="3meses">Cada 3 meses</option>
+          <option value="4meses">Cada 4 meses</option>
+          <option value="6meses">Cada 6 meses</option>
+        </select>
+      </div>
+      <div className="fg">
+        <label>📈 Subida IPC anual</label>
+        <div style={{display:"flex",gap:8,marginTop:6}}>
+          <button className={`btn btn-sm ${form.ipcEnabled==="si"?"btn-p":"btn-o"}`} onClick={()=>set("ipcEnabled","si")}>✅ Sí</button>
+          <button className={`btn btn-sm ${form.ipcEnabled==="no"?"btn-o":"btn-o"}`} onClick={()=>set("ipcEnabled","no")}>❌ No</button>
+        </div>
+      </div>
+      <div className="fg">
+        <label>🔒 Fianza</label>
+        <div style={{display:"flex",gap:8,marginTop:6}}>
+          <button className={`btn btn-sm ${form.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>set("fianza","si")}>✅ Sí</button>
+          <button className={`btn btn-sm ${form.fianza==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("fianza","no")}>❌ No</button>
+        </div>
+        {form.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe €" value={form.fianzaAmount} onChange={e=>set("fianzaAmount",e.target.value)}/>}
+      </div>
+      <div className="fg">
+        <label>📝 Notas</label>
+        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} rows={3} style={{width:"100%",padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/>
+      </div>
+      <button className="btn btn-p btn-full" onClick={()=>onSave(tenant.id,form)}>💾 {t.save}</button>
+    </div>
+  );
+}
+
+function NewTenantModal({t,onClose,onSave,onAddContract,buildings=[]}){
+  const [form,setForm]=useState({
+    name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",
+    building:"",docType:"recibo",payFreq:"mensual",
+    fianza:"",fianzaAmount:"",
+    ipcEnabled:"si",
+    notes:""
+  });
+  const [saved,setSaved]=useState(false);
+  const [savedId,setSavedId]=useState(null);
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  const handleSave=async()=>{
+    const id=await onSave(form);
+    setSavedId(id);
+    setSaved(true);
+  };
+
+  return(
+    <div className="modal">
+      <div className="modal-hd"><h3>➕ {t.newTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      {!saved?<>
+        <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
+        <div className="fg"><label>🏢 Nave / Edificio</label>
+          <select value={form.building} onChange={e=>set("building",e.target.value)}>
+            <option value="">— Seleccionar nave —</option>
+            {buildings.filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
+          </select>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Trastero 7, Local 2..."/></div>
+          <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+        </div>
+        <div className="fg"><label>{t.rent} €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
+        <div className="gr2">
+          <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
+          <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
+        </div>
+        <hr/>
+        <div className="fg">
+          <label>🧾 Tipo de documento</label>
+          <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+            <button className={`btn btn-sm ${form.docType==="recibo"?"btn-p":"btn-o"}`} onClick={()=>set("docType","recibo")}>🧾 Recibo</button>
+            <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
+            <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
+          </div>
+          {form.docType==="ambos"&&(
+            <div style={{marginTop:10,background:"var(--cream)",borderRadius:10,padding:12}}>
+              <p style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Divide el importe total entre recibo y factura:</p>
+              <div className="gr2">
+                <div className="fg"><label>Importe Recibo €</label><input type="number" placeholder="0" value={form.rentRecibo||""} onChange={e=>set("rentRecibo",e.target.value)}/></div>
+                <div className="fg"><label>Importe Factura €</label><input type="number" placeholder="0" value={form.rentFactura||""} onChange={e=>set("rentFactura",e.target.value)}/></div>
+              </div>
+              {form.rentRecibo&&form.rentFactura&&<p style={{fontSize:11,marginTop:4,color:"var(--sage)",fontWeight:600}}>Total: {(parseFloat(form.rentRecibo||0)+parseFloat(form.rentFactura||0))}€</p>}
+            </div>
+          )}
+        </div>
+        <div className="fg">
+          <label>📅 Frecuencia de pago</label>
+          <select value={form.payFreq} onChange={e=>set("payFreq",e.target.value)} style={{marginTop:4}}>
+            <option value="mensual">Mensual</option>
+            <option value="2meses">Cada 2 meses</option>
+            <option value="3meses">Cada 3 meses</option>
+            <option value="4meses">Cada 4 meses</option>
+            <option value="6meses">Cada 6 meses</option>
+          </select>
+        </div>
+        <div className="fg">
+          <label>📈 Subida IPC anual</label>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button className={`btn btn-sm ${form.ipcEnabled==="si"?"btn-p":"btn-o"}`} onClick={()=>set("ipcEnabled","si")}>✅ Sí, aplicar IPC</button>
+            <button className={`btn btn-sm ${form.ipcEnabled==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("ipcEnabled","no")}>❌ No</button>
+          </div>
+          <p style={{fontSize:11,color:"var(--warm)",marginTop:4}}>{form.ipcEnabled==="si"?"Se te avisará cada año para aplicar la subida IPC + 1,5%":"Sin subida automática de IPC"}</p>
+        </div>
+        <hr/>
+        <div className="fg">
+          <label>🔒 Fianza</label>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button className={`btn btn-sm ${form.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>set("fianza","si")}>✅ Sí, me han dado fianza</button>
+            <button className={`btn btn-sm ${form.fianza==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("fianza","no")}>❌ No</button>
+          </div>
+          {form.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe fianza €" value={form.fianzaAmount} onChange={e=>set("fianzaAmount",e.target.value)}/>}
+        </div>
+        <div className="fg">
+          <label>📝 Notas / Comentarios</label>
+          <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} placeholder="Observaciones, acuerdos especiales..." rows={3} style={{width:"100%",padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/>
+        </div>
+        <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.name||!form.unit||!form.rent}>
+          ✅ Crear inquilino
+        </button>
+      </>:<>
+        <div style={{textAlign:"center",padding:"16px 0"}}>
+          <div style={{fontSize:48,marginBottom:10}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,marginBottom:6}}>{form.name} creado</h3>
+          <p style={{color:"var(--warm)",fontSize:13,marginBottom:20}}>El inquilino ya aparece en la lista.</p>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <button className="btn btn-p" onClick={()=>{onAddContract(savedId,form);onClose();}}>
+              📝 Añadir contrato
+            </button>
+            <button className="btn btn-o" onClick={onClose}>Cerrar</button>
+          </div>
+        </div>
+      </>}
+    </div>
+  );
+}
+
+function AddCostModal({t,tenants,onSave,onClose}){
+  const now=new Date();
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const startYear=2024; const endYear=startYear+15;
+  const allMonths=[];
+  for(let y=startYear;y<endYear;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
+  const currentMonth=`${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+
+  const [tid,setTid]=useState(tenants[0]?.id||"");
+  const [costType,setCostType]=useState("💡 Electricidad");
+  const [tipo,setTipo]=useState("gasto"); // gasto | inversion
+  const [amount,setAmount]=useState("");
+  const [month,setMonth]=useState(currentMonth);
+  const [nota,setNota]=useState("");
+  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
+  const handle=()=>{
+    if(!amount)return;
+    const icon=icons[costType]||"📋";
+    const name=costType.replace(/^\S+\s/,"");
+    onSave(tid,{icon,name,month,amount:parseFloat(amount),tipo,nota});
+  };
+  return(
+    <div className="modal">
+      <div className="modal-hd"><h3>➕ {t.addCost}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="fg"><label>{t.tenant}</label><select value={tid} onChange={e=>setTid(e.target.value)}>{tenants.map(ten=><option key={ten.id} value={ten.id}>{ten.name} ({ten.unit})</option>)}</select></div>
+      <div className="fg">
+        <label>Tipo</label>
+        <div style={{display:"flex",gap:10,marginTop:4}}>
+          <button className={`btn btn-sm ${tipo==="gasto"?"btn-p":"btn-o"}`} onClick={()=>setTipo("gasto")}>💸 Gasto</button>
+          <button className={`btn btn-sm ${tipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setTipo("inversion")}>🏗️ Inversión (mía)</button>
+        </div>
+        {tipo==="inversion"&&<p style={{fontSize:12,color:"var(--warm)",marginTop:6}}>Esta inversión la asumes tú, no se carga al inquilino</p>}
+      </div>
+      <div className="gr2">
+        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.amount}</label><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"/></div>
+      </div>
+      <div className="fg"><label>{t.month}</label>
+        <select value={month} onChange={e=>setMonth(e.target.value)}>
+          {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
+      <div className="fg"><label>📝 Nota (opcional)</label><textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Cambio de caldera, pintura piso..."/></div>
+      <button className="btn btn-p btn-full" onClick={handle}>{t.save}</button>
+    </div>
+  );
+}
+
+function DocumentsPage({t,tenants,documents,onGenerate}){
+  const startYear=2024; const endYear=startYear+15;
+  const years=Array.from({length:15},(_,i)=>startYear+i);
+  const now=new Date();
+  const [selYear,setSelYear]=useState(now.getFullYear());
+  const [generating,setGenerating]=useState(false);
+
+  const handle=async()=>{
+    setGenerating(true);
+    await onGenerate(selYear);
+    setGenerating(false);
+  };
+
+  // Summary for selected year
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const months=monthNames.map(m=>`${m} ${selYear}`);
+  const totI=months.reduce((s,m)=>s+tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((ss,t)=>ss+(t.rent||0),0),0);
+  const totG=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
+  const totInv=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
+  const profit=totI-totG-totInv;
+
+  return(
+    <div>
+      <div className="page-hd"><h2>📁 {t.documents}</h2><p>Resúmenes anuales en Excel</p></div>
+
+      <div className="card">
+        <div className="card-title">📊 {t.generateExcel}</div>
+        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:20}}>
+          <select className="status-sel" style={{padding:"10px 14px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
+            {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+          <button className="btn btn-p" onClick={handle} disabled={generating}>
+            {generating?"⏳ Generando...":"📥 Generar Excel "+selYear}
+          </button>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:8}}>
+          <div style={{background:"#E6F4ED",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INGRESOS {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--green)"}}>{totI}€</div>
+          </div>
+          <div style={{background:"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>GASTOS {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--red)"}}>{totG}€</div>
+          </div>
+          <div style={{background:"#EEF2FF",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INVERSIÓN {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#4F46E5"}}>{totInv}€</div>
+          </div>
+          <div style={{background:profit>=0?"#E6F4ED":"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>PROFIT {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:profit>=0?"var(--green)":"var(--red)"}}>{profit}€</div>
+          </div>
+        </div>
+        <p style={{fontSize:12,color:"var(--warm)",marginTop:8}}>El Excel incluye 4 hojas: Resumen, Pagos, Gastos e Inquilinos</p>
+      </div>
+
+      <div className="card">
+        <div className="card-title">🗂️ Documentos generados</div>
+        {documents.length===0
+          ?<p style={{color:"var(--warm)",fontSize:14}}>{t.noDocuments}</p>
+          :documents.map(doc=>(
+            <div key={doc.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 0",borderBottom:"1px solid var(--border)"}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:15}}>📊 MiAlquiler_Resumen_{doc.year}.xlsx</div>
+                <div style={{fontSize:12,color:"var(--warm)",marginTop:3}}>
+                  Generado el {doc.date} · Ingresos: {doc.totI}€ · Gastos: {doc.totG}€ · Profit: <span style={{color:doc.profit>=0?"var(--green)":"var(--red)",fontWeight:600}}>{doc.profit}€</span>
+                </div>
+              </div>
+              <button className="btn btn-o btn-sm" onClick={()=>generateAnnualExcel(tenants,doc.year)}>
+                📥 {t.downloadDoc}
+              </button>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function ContractsPage({t,contracts,onNew,onUpload,onDownload,onDelete}){
+  const byYear={};
+  contracts.forEach(c=>{
+    const y=c.year||c.signYear||"Sin año";
+    if(!byYear[y])byYear[y]=[];
+    byYear[y].push(c);
+  });
+  const years=Object.keys(byYear).sort((a,b)=>b-a);
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>📝 {t.contracts}</h2><p>{contracts.length} contratos</p></div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o" onClick={onUpload}>📤 Subir contrato firmado</button>
+          <button className="btn btn-p" onClick={onNew}>➕ {t.newContract}</button>
+        </div>
+      </div>
+      {contracts.length===0
+        ?<div className="card"><p style={{color:"var(--warm)",textAlign:"center",padding:20}}>📂 {t.noContracts}</p></div>
+        :years.map(year=>(
+          <div key={year} className="card">
+            <div className="card-title">📁 {year}</div>
+            {byYear[year].map(c=>(
+              <div key={c.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 0",borderBottom:"1px solid var(--border)"}}>
+                <div style={{fontSize:28}}>📄</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600,fontSize:15}}>📄 {c.unit} — {c.tenantName}</div>
+                  <div style={{fontSize:12,color:"var(--warm)",marginTop:2}}>
+                    Firmado el {c.signDay}/{c.signMonth}/{c.signYear} · {c.startDay}/{c.startMonth}/{c.startYear} → {c.endDay}/{c.endMonth}/{c.endYear} · {c.rent}€/mes
+                  </div>
+                </div>
+                <button className="btn btn-o btn-sm" onClick={()=>onDownload(c)}>📥 {t.downloadDoc}</button>
+                <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar este contrato?"))onDelete(c.id);}}>🗑️</button>
+              </div>
+            ))}
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function UploadContractModal({t,onClose,onSave,prefill}){
+  const [step,setStep]=useState(1);
+  const [pdfName,setPdfName]=useState("");
+  const [saving,setSaving]=useState(false);
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const now=new Date();
+  const [form,setForm]=useState({
+    unit:prefill?.unit||"",tenantName:prefill?.name||"",tenantDni:prefill?.dni||"",
+    tenantAddress:prefill?.address||"",phone:prefill?.phone||"",email:prefill?.email||"",
+    rent:prefill?.rent||"",
+    signDay:"",signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
+    startDay:prefill?.contractStart?.split("-")[2]||"1",
+    startMonth:prefill?.contractStart?monthNames[parseInt(prefill.contractStart.split("-")[1])-1]:monthNames[now.getMonth()],
+    startYear:prefill?.contractStart?.split("-")[0]||String(now.getFullYear()),
+    endDay:prefill?.contractEnd?.split("-")[2]||"",
+    endMonth:prefill?.contractEnd?monthNames[parseInt(prefill.contractEnd.split("-")[1])-1]:"",
+    endYear:prefill?.contractEnd?.split("-")[0]||"",
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const toISO=(day,month,year)=>{const idx=monthNames.indexOf((month||"").toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
+
+  const handleSave=async()=>{
+    setSaving(true);
+    await onSave({...form,
+      contractStartISO:toISO(form.startDay,form.startMonth,form.startYear),
+      contractEndISO:toISO(form.endDay,form.endMonth,form.endYear),
+    });
+    setSaving(false);
+    setStep(2);
+  };
+
+  const bar=(active,total)=>(
+    <div style={{display:"flex",gap:6,marginBottom:18}}>
+      {Array.from({length:total},(_,i)=>(
+        <div key={i} style={{flex:1,height:4,borderRadius:4,background:i<active?"var(--terra)":"var(--border)"}}/>
+      ))}
+    </div>
+  );
+
+  return(
+    <div className="modal" style={{maxWidth:560}}>
+      {step===1&&<>
+        <div className="modal-hd"><h3>📤 Subir contrato firmado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(1,2)}
+        <p style={{fontSize:13,color:"var(--warm)",marginBottom:16}}>Introduce los datos del contrato firmado.</p>
+
+        <div className="fg"><label>Piso / Habitación / Trastero</label>
+          <input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Trastero 7, Piso 1..."/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Nombre completo inquilino</label>
+            <input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/>
+          </div>
+          <div className="fg"><label>DNI / NIE</label>
+            <input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/>
+          </div>
+        </div>
+        <div className="fg"><label>Domicilio del inquilino</label>
+          <input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Teléfono</label>
+            <input value={form.phone} onChange={e=>set("phone",e.target.value)}/>
+          </div>
+          <div className="fg"><label>Alquiler €/mes</label>
+            <input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/>
+          </div>
+        </div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas del contrato</div>
+        <div className="gr2">
+          <div className="fg"><label>Fecha de firma</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
+              <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+            </div>
+          </div>
+          <div className="fg"><label>Inicio</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
+              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
+              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
+            </div>
+          </div>
+        </div>
+        <div className="fg"><label>Fin del contrato</label>
+          <div style={{display:"flex",gap:4}}>
+            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)} placeholder="día"/>
+            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)} placeholder="mes"/>
+            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)} placeholder="año"/>
+          </div>
+        </div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Adjuntar PDF (opcional)</div>
+        <label style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",background:"var(--cream)",borderRadius:10,cursor:"pointer",marginBottom:16}}>
+          <span style={{fontSize:20}}>📎</span>
+          <span style={{fontSize:13,color:"var(--warm)"}}>{pdfName||"Seleccionar PDF del contrato"}</span>
+          <input type="file" accept=".pdf" onChange={e=>setPdfName(e.target.files[0]?.name||"")} style={{display:"none"}}/>
+        </label>
+        <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.unit||!form.tenantName||!form.rent||saving}>
+          {saving?"⏳ Guardando...":"✅ Guardar contrato y crear inquilino"}
+        </button>
+      </>}
+
+      {step===2&&<>
+        <div className="modal-hd"><h3>✅ ¡Listo!</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(2,2)}
+        <div style={{textAlign:"center",padding:"20px 0"}}>
+          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:8}}>¡Contrato guardado!</h3>
+          <p style={{color:"var(--warm)",fontSize:14,marginBottom:20}}>
+            <strong>{form.tenantName}</strong> ya aparece en Inquilinos.<br/>El contrato está guardado en Contratos.
+          </p>
+          <div style={{background:"var(--cream)",borderRadius:12,padding:14,textAlign:"left",fontSize:13,marginBottom:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Piso</span><strong>{form.unit}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.tenantName}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
+          </div>
+          <button className="btn btn-o" onClick={onClose}>Cerrar</button>
+        </div>
+      </>}
+    </div>
+  );
+}
 
 function SignaturePad({name,onSign}){
   const canvasRef=useRef(null);
@@ -368,62 +2501,26 @@ function NewContractModal({t,onClose,onSave}){
   const now=new Date();
   const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
   const [step,setStep]=useState(1);
+  const [tenantSigned,setTenantSigned]=useState(false);
   const [saving,setSaving]=useState(false);
   const [savedData,setSavedData]=useState(null);
-
-  // Duration helpers
-  const calcEndDate=(startISO, months)=>{
-    const d=new Date(startISO);
-    d.setMonth(d.getMonth()+months);
-    return d;
-  };
-  const formatDateSpanish=(d)=>({
-    day:String(d.getDate()),
-    month:monthNames[d.getMonth()],
-    year:String(d.getFullYear())
-  });
-
   const [form,setForm]=useState({
-    unit:"", building:"", tenantName:"", tenantDni:"", tenantAddress:"",
-    phone:"", email:"", rent:"",
-    durationMonths:"12", durationText:"UN AÑO",
-    signDay:String(now.getDate()), signMonth:monthNames[now.getMonth()], signYear:String(now.getFullYear()),
-    startISO:new Date().toISOString().split("T")[0],
-    tenantSignature:null, ownerSignature:null,
+    unit:"",tenantName:"",tenantDni:"",tenantAddress:"",phone:"",email:"",password:"",rent:"",
+    signDay:String(now.getDate()),signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
+    startDay:"1",startMonth:monthNames[now.getMonth()],startYear:String(now.getFullYear()),
+    endDay:"28",endMonth:monthNames[now.getMonth()],endYear:String(now.getFullYear()+2),
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const toISO=(day,month,year)=>{const idx=monthNames.indexOf(month.toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
 
-  // Compute end date from start + duration
-  const startDate=new Date(form.startISO||new Date());
-  const endDate=calcEndDate(form.startISO||new Date().toISOString().split("T")[0], parseInt(form.durationMonths)||12);
-  const startFmt=formatDateSpanish(startDate);
-  const endFmt=formatDateSpanish(endDate);
-
-  const DURATION_PRESETS=[
-    {label:"1 mes",months:1,text:"UN MES"},
-    {label:"2 meses",months:2,text:"DOS MESES"},
-    {label:"3 meses",months:3,text:"TRES MESES"},
-    {label:"6 meses",months:6,text:"SEIS MESES"},
-    {label:"11 meses",months:11,text:"ONCE MESES"},
-    {label:"1 año",months:12,text:"UN AÑO"},
-    {label:"2 años",months:24,text:"DOS AÑOS"},
-    {label:"3 años",months:36,text:"TRES AÑOS"},
-  ];
-
-  const handleSave=async()=>{
+  const handleSign=async()=>{
+    if(!tenantSigned)return;
     setSaving(true);
-    const contractData={
-      ...form,
-      signDay:form.signDay, signMonth:form.signMonth, signYear:form.signYear,
-      startDay:startFmt.day, startMonth:startFmt.month, startYear:startFmt.year,
-      endDay:endFmt.day, endMonth:endFmt.month, endYear:endFmt.year,
-      contractStartISO:form.startISO,
-      contractEndISO:endDate.toISOString().split("T")[0],
-    };
-    await onSave(contractData);
-    setSavedData(contractData);
+    const data={...form,contractStartISO:toISO(form.startDay,form.startMonth,form.startYear),contractEndISO:toISO(form.endDay,form.endMonth,form.endYear)};
+    await onSave(data);
+    setSavedData(data);
     setSaving(false);
-    setStep(4);
+    setStep(3);
   };
 
   const bar=(active,total)=>(
@@ -436,127 +2533,456 @@ function NewContractModal({t,onClose,onSave}){
 
   return(
     <div className="modal" style={{maxWidth:560}}>
-
-      {/* ── STEP 1: DATOS ── */}
       {step===1&&<>
-        <div className="modal-hd"><h3>📋 Datos del contrato</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(1,4)}
-        <p style={{fontSize:12,color:"var(--warm)",marginBottom:12}}>Rellena los campos que aparecen en la plantilla del contrato.</p>
-
-        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8}}>📦 Trastero</div>
+        <div className="modal-hd"><h3>📋 {t.contractDetails}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(1,3)}
+        <div className="fg"><label>Piso / Habitación / Trastero</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Piso 1, Trastero 3..."/></div>
         <div className="gr2">
-          <div className="fg"><label>Número de trastero *</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: 7"/></div>
-          <div className="fg"><label>Nave *</label><input value={form.building} onChange={e=>set("building",e.target.value)} placeholder="Ej: Nave Industrial A"/></div>
+          <div className="fg"><label>{t.name}</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/></div>
+          <div className="fg"><label>{t.dni}</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/></div>
         </div>
-
-        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8,marginTop:4}}>👤 Inquilino (arrendatario)</div>
+        <div className="fg"><label>{t.address}</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/></div>
         <div className="gr2">
-          <div className="fg"><label>Nombre completo *</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)} placeholder="Nombre y apellidos / Razón social"/></div>
-          <div className="fg"><label>DNI / NIF *</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/></div>
+          <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+          <div className="fg"><label>{t.rent} €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
         </div>
-        <div className="fg"><label>Domicilio del inquilino *</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, piso, ciudad"/></div>
-
-        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8,marginTop:4}}>💶 Alquiler</div>
-        <div className="fg"><label>Renta mensual (€) *</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)} placeholder="Ej: 250"/></div>
-
-        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8,marginTop:4}}>⏱️ Duración</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:10}}>
-          {DURATION_PRESETS.map(p=>(
-            <button key={p.months} className={`btn btn-sm ${form.durationMonths===String(p.months)?"btn-p":"btn-o"}`}
-              onClick={()=>{set("durationMonths",String(p.months));set("durationText",p.text);}}>
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:12}}>
-          <input type="number" min="1" value={form.durationMonths} onChange={e=>{
-            const m=e.target.value;
-            const preset=DURATION_PRESETS.find(p=>String(p.months)===m);
-            set("durationMonths",m);
-            set("durationText",preset?preset.text:m+(parseInt(m)===1?" MES":" MESES"));
-          }} style={{width:80}}/>
-          <span style={{fontSize:13,color:"var(--warm)"}}>meses (personalizado)</span>
-        </div>
-
-        <div style={{fontSize:11,fontWeight:700,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".6px",marginBottom:8}}>📅 Fechas</div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas</div>
         <div className="gr2">
-          <div className="fg"><label>Fecha inicio contrato</label><input type="date" value={form.startISO} onChange={e=>set("startISO",e.target.value)}/></div>
-          <div className="fg"><label>Fecha firma del contrato</label>
+          <div className="fg"><label>{t.signDate}</label>
             <div style={{display:"flex",gap:4}}>
               <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
-              <select value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} style={{flex:1}}>
-                {monthNames.map(m=><option key={m} value={m}>{m}</option>)}
-              </select>
-              <input style={{width:54}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+              <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+            </div>
+          </div>
+          <div className="fg"><label>{t.startDate}</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
+              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
+              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
             </div>
           </div>
         </div>
-
-        {form.startISO&&<div style={{background:"#E6F4ED",border:"1px solid #4A9B6F",borderRadius:10,padding:10,fontSize:13,marginBottom:12}}>
-          📅 <strong>{startFmt.day} de {startFmt.month} de {startFmt.year}</strong> → <strong>{endFmt.day} de {endFmt.month} de {endFmt.year}</strong> &nbsp;·&nbsp; <strong>{form.durationText}</strong>
-        </div>}
-
-        <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.unit||!form.tenantName||!form.tenantDni||!form.tenantAddress||!form.rent}>
-          Siguiente → Firma del inquilino ›
+        <div className="fg"><label>{t.endDate}</label>
+          <div style={{display:"flex",gap:4}}>
+            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)}/>
+            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)}/>
+            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
+          </div>
+        </div>
+        <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.unit||!form.tenantName||!form.rent}>
+          Siguiente → Firma ›
         </button>
       </>}
 
-      {/* ── STEP 2: FIRMA INQUILINO ── */}
       {step===2&&<>
-        <div className="modal-hd"><h3>✍️ Firma del inquilino</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(2,4)}
-        <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:16,fontSize:12,lineHeight:1.7}}>
-          <p style={{fontWeight:700,marginBottom:6}}>CONTRATO · {form.unit} · {form.building}</p>
-          <p>👤 Arrendatario: <strong>{form.tenantName}</strong> · DNI {form.tenantDni}</p>
-          <p>📍 {form.tenantAddress}</p>
-          <p>📅 {startFmt.day}/{startFmt.month}/{startFmt.year} → {endFmt.day}/{endFmt.month}/{endFmt.year} · <strong>{form.durationText}</strong></p>
-          <p>💶 Renta: <strong>{form.rent} €/mes</strong></p>
-          <p style={{fontSize:11,color:"var(--warm)",marginTop:4}}>Al firmar, el arrendatario acepta todas las cláusulas del contrato de arrendamiento.</p>
+        <div className="modal-hd"><h3>✍️ {t.tenantSignature}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(2,3)}
+        <div style={{background:"var(--cream)",borderRadius:12,padding:16,marginBottom:16,fontSize:13,lineHeight:1.8,maxHeight:200,overflowY:"auto"}}>
+          <p style={{fontWeight:700,textAlign:"center",marginBottom:10,fontSize:14}}>CONTRATO DE ARRENDAMIENTO — {form.unit.toUpperCase()}</p>
+          <p>📍 Calafell, <strong>{form.signDay} de {form.signMonth} de {form.signYear}</strong></p>
+          <p>👤 <strong>Arrendador:</strong> Joana Solé Santacana · DNI 39618190T</p>
+          <p>👤 <strong>Arrendatario:</strong> {form.tenantName} · DNI {form.tenantDni}</p>
+          <p>📅 <strong>Periodo:</strong> {form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</p>
+          <p>💶 <strong>Renta:</strong> {form.rent} €/mes · IPC + 1,5% anual</p>
         </div>
-        <SignaturePad name={form.tenantName} onSign={(sig)=>set("tenantSignature",sig)}/>
+        <SignaturePad name={form.tenantName} onSign={(sig)=>{setTenantSigned(!!sig);set("signatureData",sig);}}/>
         <div style={{display:"flex",gap:8,marginTop:12}}>
           <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
-          <button className="btn btn-p" style={{flex:1}} onClick={()=>setStep(3)} disabled={!form.tenantSignature}>
-            Siguiente → Tu firma ›
+          <button className="btn btn-p" style={{flex:1}} onClick={handleSign} disabled={!tenantSigned||saving}>
+            {saving?"⏳ Guardando...":"✅ Firmar y guardar"}
           </button>
         </div>
       </>}
 
-      {/* ── STEP 3: FIRMA ARRENDADOR ── */}
       {step===3&&<>
-        <div className="modal-hd"><h3>✍️ Tu firma (arrendador)</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(3,4)}
-        <p style={{fontSize:13,color:"var(--warm)",marginBottom:12}}>Firma como arrendadora para validar el contrato.</p>
-        <SignaturePad name="Joana Solé Santacana" onSign={(sig)=>set("ownerSignature",sig)}/>
-        <div style={{display:"flex",gap:8,marginTop:12}}>
-          <button className="btn btn-o" onClick={()=>setStep(2)}>‹ Volver</button>
-          <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={!form.ownerSignature||saving}>
-            {saving?"⏳ Guardando...":"✅ Guardar y generar PDF"}
-          </button>
-        </div>
-      </>}
-
-      {/* ── STEP 4: CONFIRMACIÓN ── */}
-      {step===4&&<>
-        <div className="modal-hd"><h3>✅ Contrato firmado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-        {bar(4,4)}
+        <div className="modal-hd"><h3>✅ Contrato guardado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(3,3)}
         <div style={{textAlign:"center",padding:"16px 0"}}>
-          <div style={{fontSize:52,marginBottom:10}}>🎉</div>
+          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
           <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:6}}>¡Contrato firmado!</h3>
-          <p style={{color:"var(--warm)",fontSize:13,marginBottom:18}}>Guardado en Contratos con ambas firmas.</p>
+          <p style={{color:"var(--warm)",fontSize:13,marginBottom:18}}>Guardado en <strong>Contratos</strong>. El inquilino ya tiene acceso a la app.</p>
           <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:18,textAlign:"left",fontSize:13}}>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Trastero</span><strong>{form.unit} · {form.building}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Piso</span><strong>{form.unit}</strong></div>
             <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.tenantName}</strong></div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Duración</span><strong>{form.durationText}</strong></div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{startFmt.day}/{startFmt.month}/{startFmt.year} → {endFmt.day}/{endFmt.month}/{endFmt.year}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
             <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
           </div>
           <div style={{display:"flex",gap:8,justifyContent:"center"}}>
-            <button className="btn btn-p" onClick={()=>generateContractPDF(savedData||form)}>📥 Descargar PDF</button>
+            <button className="btn btn-p" onClick={()=>generateContractDocx(savedData||form)}>📥 Descargar PDF</button>
             <button className="btn btn-o" onClick={onClose}>Cerrar</button>
           </div>
         </div>
       </>}
+    </div>
+  );
+}
+// ─── GENERATE INVOICE PDF ────────────────────────────────────────────
+function generateInvoicePDF(inv){
+  const pdf=new jsPDF({ format:"a4", unit:"mm" });
+  const W=210,M=20;
+  let y=20;
+  const line=()=>{pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=6;};
+  const row=(label,val,bold=false)=>{
+    pdf.setFontSize(10);
+    pdf.setFont("helvetica",bold?"bold":"normal");
+    pdf.text(label,M,y);
+    pdf.setFont("helvetica","bold");
+    pdf.text(String(val),W-M,y,{align:"right"});
+    pdf.setFont("helvetica","normal");
+    y+=7;
+  };
+
+  // Header
+  pdf.setFillColor(42,36,32);pdf.rect(0,0,W,38,"F");
+  pdf.setTextColor(255,255,255);pdf.setFontSize(22);pdf.setFont("helvetica","bold");
+  pdf.text("FACTURA",M,16);
+  pdf.setFontSize(10);pdf.setFont("helvetica","normal");
+  pdf.text(`Nº ${inv.invoiceNum}/${inv.year}`,M,24);
+  pdf.text(`Fecha: ${inv.date}`,M,30);
+  pdf.setTextColor(0,0,0);y=48;
+
+  // Emisor
+  pdf.setFontSize(9);pdf.setFont("helvetica","bold");pdf.text("EMISOR",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  ["JOANA SOLÉ SANTACANA","VIUDA DE JOAN SUAU OLIVELLA","PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª","43820 CALAFELL","DNI: 39618190T","bertasuau@gmail.com · 630 879 206"].forEach(l=>{pdf.text(l,M,y);y+=4.5;});
+  y+=4;
+
+  // Cliente
+  pdf.setFont("helvetica","bold");pdf.text("FACTURAR A",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  if(inv.clientName)pdf.text(inv.clientName,M,y),y+=4.5;
+  if(inv.clientNif)pdf.text(`NIF: ${inv.clientNif}`,M,y),y+=4.5;
+  if(inv.clientAddress)pdf.text(inv.clientAddress,M,y),y+=4.5;
+  if(inv.clientEmail)pdf.text(inv.clientEmail,M,y),y+=4.5;
+  y+=6;line();
+
+  // Concepto
+  pdf.setFillColor(245,240,235);pdf.rect(M,y-2,W-M*2,8,"F");
+  pdf.setFont("helvetica","bold");pdf.setFontSize(10);
+  pdf.text("DESCRIPCIÓN",M+2,y+4);pdf.text("IMPORTE",W-M-2,y+4,{align:"right"});
+  y+=12;pdf.setFont("helvetica","normal");
+  pdf.text(inv.concept||"Alquiler",M,y);
+  pdf.text(`€${parseFloat(inv.base).toFixed(2)}`,W-M,y,{align:"right"});
+  y+=10;line();
+
+  // Totals
+  const base=parseFloat(inv.base)||0;
+  const iva=base*0.21;
+  const irpf=base*0.19;
+  const total=base+iva-irpf;
+  row("SUBTOTAL",`€${base.toFixed(2)}`);
+  row("IVA 21%",`€${iva.toFixed(2)}`);
+  row("SUBTOTAL CON IVA",`€${(base+iva).toFixed(2)}`,true);
+  row("IRPF 19%",`-€${irpf.toFixed(2)}`);
+  y+=2;pdf.setFillColor(42,36,32);pdf.rect(M,y-4,W-M*2,12,"F");
+  pdf.setTextColor(255,255,255);pdf.setFont("helvetica","bold");pdf.setFontSize(12);
+  pdf.text("TOTAL",M+4,y+4);
+  pdf.text(`€${total.toFixed(2)}`,W-M-4,y+4,{align:"right"});
+  pdf.setTextColor(0,0,0);y+=18;
+
+  // Footer
+  pdf.setFontSize(9);pdf.setFont("helvetica","normal");
+  pdf.text("Gracias por hacer negocios con nosotros.",M,y);y+=5;
+  pdf.text("Contacto: Berta Suau · +34 630 879 206 · bertasuau@gmail.com",M,y);y+=5;
+  pdf.text("GIRO CUENTA: ES95 0049 2720 4126 1406 7889",M,y);
+
+  pdf.save(`Factura_${inv.invoiceNum}_${inv.year}_${inv.clientName||""}.pdf`);
+}
+
+// ─── GENERATE RECEIPT PDF ────────────────────────────────────────────
+function generateReceiptPDF(rec){
+  const pdf=new jsPDF({ format:"a4", unit:"mm" });
+  const W=210,M=20;
+  let y=20;
+
+  pdf.setFillColor(42,36,32);pdf.rect(0,0,W,38,"F");
+  pdf.setTextColor(255,255,255);pdf.setFontSize(22);pdf.setFont("helvetica","bold");
+  pdf.text("RECIBO",M,16);
+  pdf.setFontSize(10);pdf.setFont("helvetica","normal");
+  pdf.text(`Nº ${rec.receiptNum}/${rec.year}`,M,24);
+  pdf.text(`Fecha: ${rec.date}`,M,30);
+  pdf.setTextColor(0,0,0);y=48;
+
+  pdf.setFontSize(9);pdf.setFont("helvetica","bold");pdf.text("ARRENDADOR",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  ["JOANA SOLÉ SANTACANA","DNI: 39618190T","PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª, 43820 CALAFELL"].forEach(l=>{pdf.text(l,M,y);y+=4.5;});
+  y+=6;
+  pdf.setFont("helvetica","bold");pdf.text("ARRENDATARIO",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  if(rec.clientName)pdf.text(rec.clientName,M,y),y+=4.5;
+  if(rec.clientDni)pdf.text(`DNI/NIE: ${rec.clientDni}`,M,y),y+=4.5;
+  y+=6;
+
+  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=8;
+  pdf.setFontSize(10);pdf.setFont("helvetica","bold");pdf.text("CONCEPTO",M,y);y+=6;
+  pdf.setFont("helvetica","normal");pdf.text(rec.concept||"Alquiler mensual",M,y);y+=10;
+  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=8;
+
+  pdf.setFillColor(42,36,32);pdf.rect(M,y-4,W-M*2,14,"F");
+  pdf.setTextColor(255,255,255);pdf.setFont("helvetica","bold");pdf.setFontSize(14);
+  pdf.text("IMPORTE TOTAL",M+4,y+5);
+  pdf.text(`€${parseFloat(rec.amount).toFixed(2)}`,W-M-4,y+5,{align:"right"});
+  pdf.setTextColor(0,0,0);y+=22;
+
+  pdf.setFontSize(9);pdf.setFont("helvetica","normal");
+  pdf.text("He recibido de la parte arrendataria la cantidad indicada en concepto de renta.",M,y);y+=5;
+  pdf.text("GIRO CUENTA: ES95 0049 2720 4126 1406 7889",M,y);y+=12;
+  pdf.text("Firma arrendador: _______________________",M,y);
+
+  pdf.save(`Recibo_${rec.receiptNum}_${rec.year}_${rec.clientName||""}.pdf`);
+}
+
+// ─── INVOICES PAGE ────────────────────────────────────────────────────
+function InvoicesPage({t,tenants,invoices,onNew,onDelete}){
+  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const [openTenant,setOpenTenant]=useState(null);
+
+  // Group invoices by tenantId
+  const invByTenant={};
+  invoices.forEach(inv=>{(invByTenant[inv.tenantId]=invByTenant[inv.tenantId]||[]).push(inv);});
+
+  // Group tenants by building
+  const groups={};
+  buildings.forEach(b=>groups[b]=[]);
+  groups["Sin nave"]=[];
+  tenants.forEach(ten=>{
+    if(ten.docType==="recibo")return; // skip recibo-only
+    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave";
+    groups[b].push(ten);
+  });
+  const allGroups=[...buildings,"Sin nave"].filter(b=>groups[b].length>0);
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>🧾 Facturas</h2><p>{invoices.length} facturas guardadas</p></div>
+      </div>
+      {allGroups.map(building=>(
+        <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+          <div style={{background:getBuildingColor(building),color:"white",padding:"10px 16px",fontFamily:"'DM Serif Display',serif",fontSize:15}}>
+            🏢 {building}
+          </div>
+          {groups[building].map(ten=>{
+            const invs=invByTenant[ten.id]||[];
+            const isOpen=openTenant===ten.id;
+            return(
+              <div key={ten.id} style={{borderBottom:"1px solid var(--border)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",cursor:"pointer",background:"white"}} onClick={()=>setOpenTenant(isOpen?null:ten.id)}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div className="av av-sm" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:14}}>{ten.name}</div>
+                      <div style={{fontSize:11,color:"var(--warm)"}}>{ten.unit} · {invs.length} facturas</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();onNew(ten.id);}}>➕ Nueva factura</button>
+                    <span style={{fontSize:16}}>{isOpen?"▲":"▼"}</span>
+                  </div>
+                </div>
+                {isOpen&&(
+                  <div style={{background:"var(--cream)",padding:"8px 16px"}}>
+                    {invs.length===0
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:"8px 0"}}>No hay facturas aún</p>
+                      :invs.sort((a,b)=>b.invoiceNum-a.invoiceNum).map(inv=>(
+                        <div key={inv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                          <div>
+                            <div style={{fontWeight:600,fontSize:13}}>Factura {inv.invoiceNum}/{inv.year} · {inv.date}</div>
+                            <div style={{fontSize:11,color:"var(--warm)"}}>{inv.concept} · Base: {inv.base}€ · Total: {(parseFloat(inv.base)*(1+0.21-0.19)).toFixed(2)}€</div>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button className="btn btn-o btn-sm" onClick={()=>generateInvoicePDF(inv)}>📥</button>
+                            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar factura?"))onDelete(inv.id);}}>🗑️</button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {allGroups.length===0&&<div className="card"><p style={{textAlign:"center",color:"var(--warm)",padding:20}}>No hay inquilinos con factura</p></div>}
+    </div>
+  );
+}
+
+// ─── RECEIPTS PAGE ────────────────────────────────────────────────────
+function ReceiptsPage({t,tenants,receipts,onNew,onDelete}){
+  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const [openTenant,setOpenTenant]=useState(null);
+  const recByTenant={};
+  receipts.forEach(rec=>{(recByTenant[rec.tenantId]=recByTenant[rec.tenantId]||[]).push(rec);});
+  const groups={};
+  buildings.forEach(b=>groups[b]=[]);
+  groups["Sin nave"]=[];
+  tenants.forEach(ten=>{
+    if(ten.docType==="factura")return;
+    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave";
+    groups[b].push(ten);
+  });
+  const allGroups=[...buildings,"Sin nave"].filter(b=>groups[b].length>0);
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>🖨️ Recibos</h2><p>{receipts.length} recibos guardados</p></div>
+      </div>
+      {allGroups.map(building=>(
+        <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+          <div style={{background:getBuildingColor(building),color:"white",padding:"10px 16px",fontFamily:"'DM Serif Display',serif",fontSize:15}}>
+            🏢 {building}
+          </div>
+          {groups[building].map(ten=>{
+            const recs=recByTenant[ten.id]||[];
+            const isOpen=openTenant===ten.id;
+            return(
+              <div key={ten.id} style={{borderBottom:"1px solid var(--border)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",cursor:"pointer",background:"white"}} onClick={()=>setOpenTenant(isOpen?null:ten.id)}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div className="av av-sm" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:14}}>{ten.name}</div>
+                      <div style={{fontSize:11,color:"var(--warm)"}}>{ten.unit} · {recs.length} recibos</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();onNew(ten.id);}}>➕ Nuevo recibo</button>
+                    <span style={{fontSize:16}}>{isOpen?"▲":"▼"}</span>
+                  </div>
+                </div>
+                {isOpen&&(
+                  <div style={{background:"var(--cream)",padding:"8px 16px"}}>
+                    {recs.length===0
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:"8px 0"}}>No hay recibos aún</p>
+                      :recs.sort((a,b)=>b.receiptNum-a.receiptNum).map(rec=>(
+                        <div key={rec.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                          <div>
+                            <div style={{fontWeight:600,fontSize:13}}>Recibo {rec.receiptNum}/{rec.year} · {rec.date}</div>
+                            <div style={{fontSize:11,color:"var(--warm)"}}>{rec.concept} · {rec.amount}€</div>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button className="btn btn-o btn-sm" onClick={()=>generateReceiptPDF(rec)}>📥</button>
+                            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar recibo?"))onDelete(rec.id);}}>🗑️</button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── NEW INVOICE MODAL ────────────────────────────────────────────────
+function NewInvoiceModal({t,tenant,invoices,onClose,onSave}){
+  const now=new Date();
+  const year=now.getFullYear();
+  // Next invoice number: max existing + 1, starting from 7
+  const allNums=invoices.filter(i=>i.year===year).map(i=>i.invoiceNum);
+  const nextNum=allNums.length>0?Math.max(...allNums)+1:7;
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+  const [form,setForm]=useState({
+    invoiceNum:nextNum,year,
+    date:`${now.getDate()}/${now.getMonth()+1}/${year}`,
+    concept:`Alquiler ${tenant?.unit||""} ${monthNames[now.getMonth()]} ${year}`,
+    base:tenant?.rentFactura||tenant?.rent||"",
+    clientName:tenant?.name||"",clientNif:"",clientAddress:"",clientEmail:tenant?.email||""
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const base=parseFloat(form.base)||0;
+  const iva=base*0.21;
+  const irpf=base*0.19;
+  const total=base+iva-irpf;
+
+  const handleSave=async()=>{
+    await onSave({...form,tenantId:tenant.id,tenantName:tenant.name,invoiceNum:parseInt(form.invoiceNum)});
+    generateInvoicePDF({...form,tenantId:tenant.id,invoiceNum:parseInt(form.invoiceNum)});
+    onClose();
+  };
+
+  return(
+    <div className="modal" style={{maxWidth:520}}>
+      <div className="modal-hd"><h3>🧾 Nueva Factura</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="gr2">
+        <div className="fg"><label>Nº Factura</label><input type="number" value={form.invoiceNum} onChange={e=>set("invoiceNum",e.target.value)}/></div>
+        <div className="fg"><label>Fecha</label><input value={form.date} onChange={e=>set("date",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>Concepto</label><input value={form.concept} onChange={e=>set("concept",e.target.value)}/></div>
+      <div className="fg"><label>Base imponible €</label><input type="number" value={form.base} onChange={e=>set("base",e.target.value)}/></div>
+      {base>0&&(
+        <div style={{background:"var(--cream)",borderRadius:10,padding:12,marginBottom:12,fontSize:13}}>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>Subtotal</span><span>€{base.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>IVA 21%</span><span>€{iva.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>IRPF 19%</span><span>-€{irpf.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderTop:"2px solid var(--border)",fontWeight:700,marginTop:4}}><span>TOTAL</span><span>€{total.toFixed(2)}</span></div>
+        </div>
+      )}
+      <hr/>
+      <div style={{fontSize:12,fontWeight:600,color:"var(--warm)",marginBottom:8,textTransform:"uppercase"}}>Datos del cliente</div>
+      <div className="gr2">
+        <div className="fg"><label>Nombre / Empresa</label><input value={form.clientName} onChange={e=>set("clientName",e.target.value)}/></div>
+        <div className="fg"><label>NIF / DNI</label><input value={form.clientNif} onChange={e=>set("clientNif",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>Dirección</label><input value={form.clientAddress} onChange={e=>set("clientAddress",e.target.value)}/></div>
+      <div className="fg"><label>Email</label><input value={form.clientEmail} onChange={e=>set("clientEmail",e.target.value)}/></div>
+      <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.base||!form.clientName}>
+        💾 Guardar y descargar PDF
+      </button>
+    </div>
+  );
+}
+
+// ─── NEW RECEIPT MODAL ────────────────────────────────────────────────
+function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
+  const now=new Date();
+  const year=now.getFullYear();
+  const allNums=receipts.filter(r=>r.year===year).map(r=>r.receiptNum);
+  const nextNum=allNums.length>0?Math.max(...allNums)+1:1;
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+  const [form,setForm]=useState({
+    receiptNum:nextNum,year,
+    date:`${now.getDate()}/${now.getMonth()+1}/${year}`,
+    concept:`Alquiler ${tenant?.unit||""} ${monthNames[now.getMonth()]} ${year}`,
+    amount:tenant?.rentRecibo||tenant?.rent||"",
+    clientName:tenant?.name||"",clientDni:tenant?.dni||""
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  const handleSave=async()=>{
+    await onSave({...form,tenantId:tenant.id,tenantName:tenant.name,receiptNum:parseInt(form.receiptNum)});
+    generateReceiptPDF({...form,tenantId:tenant.id,receiptNum:parseInt(form.receiptNum)});
+    onClose();
+  };
+
+  return(
+    <div className="modal" style={{maxWidth:480}}>
+      <div className="modal-hd"><h3>🖨️ Nuevo Recibo</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="gr2">
+        <div className="fg"><label>Nº Recibo</label><input type="number" value={form.receiptNum} onChange={e=>set("receiptNum",e.target.value)}/></div>
+        <div className="fg"><label>Fecha</label><input value={form.date} onChange={e=>set("date",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>Concepto</label><input value={form.concept} onChange={e=>set("concept",e.target.value)}/></div>
+      <div className="fg"><label>Importe €</label><input type="number" value={form.amount} onChange={e=>set("amount",e.target.value)}/></div>
+      <hr/>
+      <div className="gr2">
+        <div className="fg"><label>Nombre inquilino</label><input value={form.clientName} onChange={e=>set("clientName",e.target.value)}/></div>
+        <div className="fg"><label>DNI / NIE</label><input value={form.clientDni} onChange={e=>set("clientDni",e.target.value)}/></div>
+      </div>
+      <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.amount||!form.clientName}>
+        💾 Guardar y descargar PDF
+      </button>
     </div>
   );
 }
@@ -576,27 +3002,18 @@ function AssignTenantModal({unit,buildings,onClose,onSave}){
   });
   const [contract,setContract]=useState({
     addContract:true,
-    durationMonths:"12", durationText:"UN AÑO",
+    signDay:String(now.getDate()),signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
+    startDay:"1",startMonth:monthNames[now.getMonth()],startYear:String(now.getFullYear()),
+    endDay:"",endMonth:"",endYear:"",
   });
   const setT=(k,v)=>setTenant(t=>({...t,[k]:v}));
   const setC=(k,v)=>setContract(c=>({...c,[k]:v}));
 
   const handleSave=async()=>{
     setSaving(true);
-    const startD=new Date(tenant.contractStart||new Date());
-    const endD=new Date(startD);
-    endD.setMonth(endD.getMonth()+(parseInt(contract.durationMonths)||12));
-    const mNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
     const contractData=contract.addContract?{
-      unit:unit.name, building:unit.building,
-      tenantName:tenant.name, tenantDni:tenant.dni||"", tenantAddress:tenant.address||"",
-      rent:tenant.rent,
-      signDay:String(new Date().getDate()), signMonth:mNames[new Date().getMonth()], signYear:String(new Date().getFullYear()),
-      startDay:String(startD.getDate()), startMonth:mNames[startD.getMonth()], startYear:String(startD.getFullYear()),
-      endDay:String(endD.getDate()), endMonth:mNames[endD.getMonth()], endYear:String(endD.getFullYear()),
-      durationText:contract.durationText||"UN AÑO",
-      contractStartISO:startD.toISOString().split("T")[0],
-      contractEndISO:endD.toISOString().split("T")[0],
+      ...contract, unit:unit.name, tenantName:tenant.name,
+      rent:tenant.rent, tenantDni:"", tenantAddress:""
     }:null;
     await onSave({...tenant,building:unit.building},contractData);
     setSaving(false);
@@ -670,21 +3087,34 @@ function AssignTenantModal({unit,buildings,onClose,onSave}){
           <button className={`btn btn-sm ${!contract.addContract?"btn-s":"btn-o"}`} onClick={()=>setC("addContract",false)}>Sin contrato por ahora</button>
         </div>
         {contract.addContract&&<>
-          <div className="fg">
-            <label>⏱️ Duración</label>
-            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:8}}>
-              {[{l:"1 mes",m:1,t:"UN MES"},{l:"3 meses",m:3,t:"TRES MESES"},{l:"6 meses",m:6,t:"SEIS MESES"},{l:"11 meses",m:11,t:"ONCE MESES"},{l:"1 año",m:12,t:"UN AÑO"},{l:"2 años",m:24,t:"DOS AÑOS"},{l:"3 años",m:36,t:"TRES AÑOS"}].map(p=>(
-                <button key={p.m} className={`btn btn-sm ${contract.durationMonths===String(p.m)?"btn-p":"btn-o"}`}
-                  onClick={()=>{setC("durationMonths",String(p.m));setC("durationText",p.t);}}>
-                  {p.l}
-                </button>
-              ))}
-            </div>
-            <div style={{display:"flex",gap:8,marginTop:8,alignItems:"center"}}>
-              <input type="number" min="1" value={contract.durationMonths} onChange={e=>{setC("durationMonths",e.target.value);setC("durationText",e.target.value+" MES"+(parseInt(e.target.value)===1?"":"ES"));}} style={{width:70}}/>
-              <span style={{fontSize:12,color:"var(--warm)"}}>meses personalizados</span>
+          <div style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Fecha firma</div>
+          <div className="gr2" style={{marginBottom:8}}>
+            <div className="fg"><label>Día</label><input value={contract.signDay} onChange={e=>setC("signDay",e.target.value)}/></div>
+            <div className="fg"><label>Mes</label>
+              <select value={contract.signMonth} onChange={e=>setC("signMonth",e.target.value)}>
+                {["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"].map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
             </div>
           </div>
+          <div style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Inicio contrato</div>
+          <div className="gr2" style={{marginBottom:8}}>
+            <div className="fg"><label>Día</label><input value={contract.startDay} onChange={e=>setC("startDay",e.target.value)}/></div>
+            <div className="fg"><label>Mes</label>
+              <select value={contract.startMonth} onChange={e=>setC("startMonth",e.target.value)}>
+                {["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"].map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Fin contrato</div>
+          <div className="gr2">
+            <div className="fg"><label>Día</label><input value={contract.endDay} onChange={e=>setC("endDay",e.target.value)}/></div>
+            <div className="fg"><label>Mes</label>
+              <select value={contract.endMonth} onChange={e=>setC("endMonth",e.target.value)}>
+                {["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"].map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="fg"><label>Año fin</label><input value={contract.endYear} onChange={e=>setC("endYear",e.target.value)} placeholder={String(new Date().getFullYear()+1)}/></div>
         </>}
         <div style={{display:"flex",gap:8,marginTop:8}}>
           <button className="btn btn-o" onClick={()=>setStep(1)}>← Atrás</button>
@@ -939,5 +3369,3 @@ function StatusBadge({status,t}){
   const s=map[status]||{bg:"#F0ECE8",color:"#8C7B6E",label:status};
   return<span className="badge" style={{background:s.bg,color:s.color}}>{s.label}</span>;
 }
-
-export default App;
