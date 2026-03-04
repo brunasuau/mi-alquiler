@@ -943,7 +943,15 @@ function StatusBadge({status,t}){
 export default function App() {
   return (
     <div style={{ padding: 24 }}>
-      <h1>Mi Alquiler</h1>
+      <TrasterosPage
+        tenants={[]}
+        units={[]}
+        buildings={[]}
+        propId={"demo"}
+        onSaveUnit={async () => {}}
+        onDeleteUnit={async () => {}}
+        onAssignTenant={() => {}}
+      />
     </div>
   );
 }
