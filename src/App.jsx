@@ -940,18 +940,4 @@ function StatusBadge({status,t}){
   return<span className="badge" style={{background:s.bg,color:s.color}}>{s.label}</span>;
 }
 
-export default function App() {
-  return (
-    <div style={{ padding: 24 }}>
-      <TrasterosPage
-        tenants={[]}
-        units={[]}
-        buildings={[]}
-        propId={"demo"}
-        onSaveUnit={async () => {}}
-        onDeleteUnit={async () => {}}
-        onAssignTenant={() => {}}
-      />
-    </div>
-  );
-}
+export default App;
