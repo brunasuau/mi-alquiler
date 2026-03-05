@@ -673,6 +673,24 @@ export default function App() {
     showToast("🗑️ Recibo eliminado");
   }
 
+  // TRASTEROS
+  const [trasteros,setTrasteros]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(query(collection(db,"trasteros",user.uid,"list"),orderBy("createdAt","asc")),snap=>{
+      setTrasteros(snap.docs.map(d=>({id:d.id,...d.data()})));
+    });
+  },[user,isOwner]);
+  async function addTrastero({unit,building}){
+    await addDoc(collection(db,"trasteros",user.uid,"list"),{unit,building,createdAt:serverTimestamp()});
+    showToast("✅ Trastero añadido");
+  }
+  async function deleteTrastero(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"trasteros",user.uid,"list",id));
+    showToast("🗑️ Trastero eliminado");
+  }
+
   async function saveContract(contractInfo){
     await addDoc(collection(db,"contracts",user.uid,"files"),{...contractInfo,createdAt:serverTimestamp()});
   }
@@ -841,7 +859,7 @@ export default function App() {
       if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
       if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
       if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
-      if(page==="trasteros")return<TrasterosPage t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onCreateTenant={async(data)=>{const id=await createTenant(data);if(id&&data._contractData){await saveContract({...data._contractData,year:data._contractData.signYear||new Date().getFullYear(),date:today(),tenantUid:id});generateContractDocx(data._contractData);}}}/>;
+      if(page==="trasteros")return<TrasterosPage t={t} tenants={tenants} buildings={currentProp?.buildings||[]} trasteros={trasteros} onAddTrastero={addTrastero} onDeleteTrastero={deleteTrastero} onCreateTenant={async(data)=>{const id=await createTenant(data);if(id&&data._contractData){await saveContract({...data._contractData,year:data._contractData.signYear||new Date().getFullYear(),date:today(),tenantUid:id});generateContractDocx(data._contractData);}}}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -2809,86 +2827,131 @@ function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
 }
 
 // ─── TRASTEROS PAGE ──────────────────────────────────────────────────
-function TrasterosPage({t, tenants, buildings, onCreateTenant}) {
+function TrasterosPage({t, tenants, buildings, onCreateTenant, trasteros, onAddTrastero, onDeleteTrastero}) {
   const [modal, setModal] = useState(null);
+  const [newUnit, setNewUnit] = useState("");
+  const [newBuilding, setNewBuilding] = useState("");
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [saving, setSaving] = useState(false);
   const buildingColors = ["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D"];
   const naves = buildings.filter(b=>b);
 
-  const getTenantsInBuilding = (building) => tenants.filter(ten => ten.building === building);
-
-  const getTrasteroNum = (unit) => { const m = unit.match(/\d+/); return m ? parseInt(m[0]) : 0; };
-
-  const buildingSlots = (building) => {
-    const occupied = getTenantsInBuilding(building);
-    const slots = [];
-    for(let i=1; i<=20; i++){
-      const unit = `Trastero ${i}`;
-      const tenant = occupied.find(t => getTrasteroNum(t.unit) === i || t.unit === unit);
-      slots.push({num:i, unit, tenant});
-    }
-    return slots;
+  const handleAddTrastero = async() => {
+    if(!newUnit.trim()||!newBuilding) return;
+    setSaving(true);
+    await onAddTrastero({unit:newUnit.trim(), building:newBuilding});
+    setNewUnit(""); setNewBuilding(""); setShowAddForm(false);
+    setSaving(false);
   };
 
-  const totalOcupados = naves.reduce((s,b)=>s+getTenantsInBuilding(b).length,0);
+  const byBuilding = {};
+  naves.forEach(b=>byBuilding[b]=[]);
+  byBuilding["Sin nave"]=[];
+  trasteros.forEach(tr=>{
+    const b = naves.includes(tr.building)?tr.building:"Sin nave";
+    (byBuilding[b]=byBuilding[b]||[]).push(tr);
+  });
+  const allGroups = [...naves,"Sin nave"].filter(b=>byBuilding[b]?.length>0);
+
+  const getTenant = (unit, building) => tenants.find(ten=>ten.unit===unit && ten.building===building);
+  const totalOcupados = trasteros.filter(tr=>getTenant(tr.unit,tr.building)).length;
 
   return(
     <div>
-      <div className="page-hd">
-        <h2>🏚️ Trasteros</h2>
-        <p>Vista por naves — {totalOcupados} ocupados · {naves.length*20-totalOcupados} libres</p>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <h2>🏚️ Trasteros</h2>
+          <p>{trasteros.length} trasteros · 🔴 {totalOcupados} ocupados · 🟢 {trasteros.length-totalOcupados} libres</p>
+        </div>
+        <button className="btn btn-p" onClick={()=>setShowAddForm(v=>!v)}>➕ Añadir trastero</button>
       </div>
 
-      {naves.length === 0 && (
+      {showAddForm && (
+        <div className="card" style={{marginBottom:20,border:"2px solid var(--terra)"}}>
+          <div className="card-title">➕ Nuevo trastero</div>
+          <div className="gr2">
+            <div className="fg">
+              <label>Nombre / número del trastero</label>
+              <input value={newUnit} onChange={e=>setNewUnit(e.target.value)} placeholder="Ej: Trastero 5, T-12, A3..."/>
+            </div>
+            <div className="fg">
+              <label>Nave</label>
+              <select value={newBuilding} onChange={e=>setNewBuilding(e.target.value)}>
+                <option value="">— Selecciona nave —</option>
+                {naves.map(b=><option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn btn-o" onClick={()=>{setShowAddForm(false);setNewUnit("");setNewBuilding("");}}>Cancelar</button>
+            <button className="btn btn-p" onClick={handleAddTrastero} disabled={!newUnit.trim()||!newBuilding||saving}>
+              {saving?"⏳ Guardando...":"✅ Guardar trastero"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {trasteros.length===0 && !showAddForm && (
         <div className="card">
           <p style={{color:"var(--warm)",textAlign:"center",padding:20}}>
-            No hay naves configuradas. Ve a Ajustes de propiedad para añadir naves.
+            No hay trasteros todavía. Haz clic en <strong>➕ Añadir trastero</strong> para crear el primero.
           </p>
         </div>
       )}
 
-      {naves.map((building, bi) => {
-        const slots = buildingSlots(building);
-        const ocupados = slots.filter(s=>s.tenant).length;
+      {allGroups.map((building, bi) => {
+        const slots = byBuilding[building]||[];
+        const ocupados = slots.filter(s=>getTenant(s.unit,s.building)).length;
         const color = buildingColors[bi % buildingColors.length];
         return(
           <div key={building} style={{marginBottom:20,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
             <div style={{background:color,color:"white",padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div>
                 <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18}}>🏢 {building}</div>
-                <div style={{fontSize:13,opacity:.85,marginTop:2}}>{ocupados} ocupados · {20-ocupados} libres</div>
+                <div style={{fontSize:13,opacity:.85,marginTop:2}}>{slots.length} trasteros · {ocupados} ocupados · {slots.length-ocupados} libres</div>
               </div>
               <div style={{display:"flex",gap:10,fontSize:12}}>
-                <span style={{background:"rgba(255,255,255,0.2)",padding:"4px 12px",borderRadius:20}}>🔴 {ocupados} ocupados</span>
-                <span style={{background:"rgba(255,255,255,0.2)",padding:"4px 12px",borderRadius:20}}>🟢 {20-ocupados} libres</span>
+                <span style={{background:"rgba(255,255,255,0.2)",padding:"4px 12px",borderRadius:20}}>🔴 {ocupados}</span>
+                <span style={{background:"rgba(255,255,255,0.2)",padding:"4px 12px",borderRadius:20}}>🟢 {slots.length-ocupados}</span>
               </div>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:10,padding:16,background:"var(--cream)"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:10,padding:16,background:"var(--cream)"}}>
               {slots.map(slot => {
-                const occupied = !!slot.tenant;
+                const tenant = getTenant(slot.unit, slot.building);
+                const occupied = !!tenant;
                 return(
-                  <div key={slot.num}
-                    onClick={()=>{if(!occupied) setModal({building, unit:slot.unit, num:slot.num});}}
-                    style={{
-                      background: occupied ? "#FFF0EE" : "#F0FAF4",
-                      border:`2px solid ${occupied?"#D94F3D":"#4A9B6F"}`,
-                      borderRadius:12, padding:"12px 8px", textAlign:"center",
-                      cursor: occupied ? "default" : "pointer", transition:"all .2s"
-                    }}
-                    onMouseEnter={e=>{if(!occupied)e.currentTarget.style.transform="scale(1.04)";}}
-                    onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
-                  >
-                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,fontWeight:700,color:occupied?"#D94F3D":"#4A9B6F"}}>{slot.num}</div>
-                    <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".4px",color:occupied?"#D94F3D":"#4A9B6F",marginBottom:4}}>
-                      {occupied?"🔴 Ocupado":"🟢 Libre"}
-                    </div>
-                    {occupied && (
-                      <div style={{fontSize:11,color:"#444",lineHeight:1.3}}>
-                        <div style={{fontWeight:600}}>{slot.tenant.name}</div>
-                        <div style={{color:"var(--warm)",fontSize:10}}>{slot.tenant.rent}€/mes</div>
-                        {slot.tenant.contractEnd&&<div style={{color:"var(--warm)",fontSize:9,marginTop:1}}>hasta {slot.tenant.contractEnd}</div>}
+                  <div key={slot.id} style={{position:"relative"}}>
+                    <div
+                      onClick={()=>{if(!occupied) setModal({building:slot.building, unit:slot.unit});}}
+                      style={{
+                        background:occupied?"#FFF0EE":"#F0FAF4",
+                        border:`2px solid ${occupied?"#D94F3D":"#4A9B6F"}`,
+                        borderRadius:12, padding:"12px 8px", textAlign:"center",
+                        cursor:occupied?"default":"pointer", transition:"all .2s"
+                      }}
+                      onMouseEnter={e=>{if(!occupied)e.currentTarget.style.transform="scale(1.04)";}}
+                      onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
+                    >
+                      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:17,fontWeight:700,color:occupied?"#D94F3D":"#4A9B6F",marginBottom:2}}>{slot.unit}</div>
+                      <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".4px",color:occupied?"#D94F3D":"#4A9B6F",marginBottom:4}}>
+                        {occupied?"🔴 Ocupado":"🟢 Libre"}
                       </div>
+                      {occupied && (
+                        <div style={{fontSize:11,color:"#444",lineHeight:1.3}}>
+                          <div style={{fontWeight:600}}>{tenant.name}</div>
+                          <div style={{color:"var(--warm)",fontSize:10}}>{tenant.rent}€/mes</div>
+                          {tenant.contractEnd&&<div style={{color:"var(--warm)",fontSize:9,marginTop:1}}>hasta {tenant.contractEnd}</div>}
+                        </div>
+                      )}
+                      {!occupied && <div style={{fontSize:10,color:"#4A9B6F",marginTop:4}}>➕ Añadir inquilino</div>}
+                    </div>
+                    {!occupied && (
+                      <button
+                        onClick={()=>{if(confirm("¿Eliminar trastero "+slot.unit+"?")) onDeleteTrastero(slot.id);}}
+                        style={{position:"absolute",top:4,right:4,background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#bbb",padding:2,lineHeight:1}}
+                        title="Eliminar trastero"
+                      >✕</button>
                     )}
-                    {!occupied && <div style={{fontSize:10,color:"#4A9B6F",marginTop:4}}>➕ Añadir</div>}
                   </div>
                 );
               })}
@@ -2911,6 +2974,7 @@ function TrasterosPage({t, tenants, buildings, onCreateTenant}) {
     </div>
   );
 }
+
 
 // ─── NUEVO TRASTERO MODAL ─────────────────────────────────────────────
 function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
