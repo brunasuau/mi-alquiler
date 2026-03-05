@@ -122,32 +122,28 @@ function generateContractDocx(data) {
   let y=20;
   const lh=6;
 
-  function addText(segments, lineW=maxW) {
-    // segments: [{text, bold}]
-    let x=lm;
-    // Build lines by wrapping words
-    let lines=[[]]; // array of segments per line
+  function addText(segments, extraSpacing=2) {
+    const lines=[[]];
     segments.forEach(seg=>{
       const words=seg.text.split(" ");
       words.forEach((word,wi)=>{
         const w=word+(wi<words.length-1?" ":"");
         d.setFont("helvetica", seg.bold?"bold":"normal");
+        d.setFontSize(10);
         const ww=d.getTextWidth(w);
-        const lineW2=d.getTextWidth(lines[lines.length-1].map(s=>s.text).join(""));
-        if(lineW2+ww>lineW && lines[lines.length-1].length>0){
+        const lineW=d.getTextWidth(lines[lines.length-1].map(s=>s.text).join(""));
+        if(lineW+ww>maxW && lines[lines.length-1].length>0){
           lines.push([{text:w,bold:seg.bold}]);
         } else {
           const last=lines[lines.length-1];
           if(last.length>0&&last[last.length-1].bold===seg.bold){
             last[last.length-1].text+=w;
-          } else {
-            last.push({text:w,bold:seg.bold});
-          }
+          } else { last.push({text:w,bold:seg.bold}); }
         }
       });
     });
     lines.forEach(line=>{
-      if(y>280){d.addPage();y=20;}
+      if(y>278){d.addPage();y=20;}
       let cx=lm;
       line.forEach(seg=>{
         d.setFont("helvetica",seg.bold?"bold":"normal");
@@ -157,69 +153,121 @@ function generateContractDocx(data) {
       });
       y+=lh;
     });
-    y+=2;
+    y+=extraSpacing;
   }
 
-  function title(text){
-    if(y>270){d.addPage();y=20;}
-    d.setFont("helvetica","bold"); d.setFontSize(13);
-    d.text(text, 105, y, {align:"center"}); y+=8;
-    d.setFontSize(10);
-  }
-  function heading(text){
-    if(y>270){d.addPage();y=20;}
+  function heading(text) {
+    if(y>272){d.addPage();y=20;}
     d.setFont("helvetica","bold"); d.setFontSize(10);
     d.text(text,lm,y); y+=lh+1;
   }
-  function space(){y+=3;}
+  function space(n=3){y+=n;}
+  function hr(){d.setDrawColor(180,180,180);d.line(lm,y,rm,y);y+=5;}
 
-  title(`CONTRATO DE ARRENDAMIENTO DE ${unit.toUpperCase()}`);
+  // ── TÍTULOS ──
+  d.setFont("helvetica","bold"); d.setFontSize(11);
+  d.text("CONTRATO", 105, y, {align:"center"}); y+=lh+2;
+  d.setFontSize(10);
+  d.text("CONTRATO DE ALQUILER PARA USO DISTINTO A VIVIENDA", 105, y, {align:"center"}); y+=lh+2;
+  hr();
+
+  addText([{text:`En Calafell, a ${signDay} de ${signMonth} de ${signYear}`}]);
   space();
-  addText([{text:`En Calafell, a ${signDay} de ${signMonth} de ${signYear}.`}]);
+
+  // ── REUNIDOS ──
+  heading("R E U N I D O S:");
+  addText([{text:"De una parte, "},{text:"Joana Solé Santacana",bold:true},{text:", mayor de edad, con domicilio a estos efectos en el Passeig Marítim Sant Joan de Déu núm. 90, Esc. B, 5º 2ª de Calafell, provista de DNI número "},{text:"39618190T",bold:true},{text:"."}]);
+  space(2);
+  addText([{text:"De otra, Sr/a. "},{text:tenantName,bold:true},{text:", mayor de edad, con domicilio a estos efectos en "},{text:tenantAddress||"—",bold:true},{text:", provista de DNI número "},{text:tenantDni||"—",bold:true},{text:"."}]);
+  space(2);
+  addText([{text:"Después de reconocerse mutuamente la capacidad legal para obligar y obligarse, haciéndolo libre y voluntariamente,"}]);
   space();
-  heading("REUNIDOS");
-  addText([{text:"De una parte, D./Dña. "},{text:"JOANA SOLÉ SANTACANA",bold:true},{text:", mayor de edad, con DNI nº "},{text:"39618190T",bold:true},{text:", domicilio en "},{text:"PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª",bold:true},{text:", en adelante "},{text:"EL ARRENDADOR",bold:true},{text:"."}]);
-  addText([{text:"Y de otra parte, D./Dña. "},{text:tenantName,bold:true},{text:", DNI nº "},{text:tenantDni,bold:true},{text:", domicilio en "},{text:tenantAddress,bold:true},{text:", en adelante "},{text:"EL ARRENDATARIO",bold:true},{text:"."}]);
-  addText([{text:"Ambas partes se reconocen capacidad legal suficiente para formalizar el presente contrato."}]);
+
+  // ── MANIFIESTAN ──
+  heading("M A N I F I E S T A N:");
+  addText([{text:"I.- Que Joana Solé Santacana por sus justos y legítimos títulos resulta ser titular del trastero número "},{text:unit,bold:true},{text:" situado en la Nave Industrial sita en "},{text:"C/ Pou, 61 Calafell (Tarragona)",bold:true},{text:"."}]);
+  space(2);
+  addText([{text:"II.- Que la arrendataria está interesada en el arrendamiento de dicho Trastero para almacenar en el mismo existencias y/o utensilios propios."}]);
+  space(2);
+  addText([{text:"Que en virtud de lo referido, acuerdan formalizar el presente contrato por las siguientes,"}]);
   space();
-  heading("EXPONEN");
-  addText([{text:"1. El ARRENDADOR es propietario del local en "},{text:"Carrer Montserrat, nº 14, Calafell (Tarragona)",bold:true},{text:"."}]);
-  addText([{text:"2. Ambas partes desean renovar el arrendamiento bajo las siguientes condiciones."}]);
-  space();
-  heading("CLÁUSULAS");
-  heading("Primera. Objeto");
-  addText([{text:"El ARRENDADOR renueva el arrendamiento sobre el local en "},{text:"Carrer Montserrat, nº 14, Calafell",bold:true},{text:", uso comercial."}]);
-  heading("Segunda. Duración");
-  addText([{text:"Duración dos (2) años: del "},{text:`${startDay} de ${startMonth} de ${startYear}`,bold:true},{text:" al "},{text:`${endDay} de ${endMonth} de ${endYear}`,bold:true},{text:"."}]);
-  heading("Tercera. Renta");
-  addText([{text:"Renta mensual: "},{text:`${rent} €`,bold:true},{text:", abonada los cinco primeros días del mes por transferencia bancaria."}]);
-  heading("Cuarta. Actualización de la renta");
-  addText([{text:"Actualización anual según IPC + 1,5% adicional. Primera actualización a los 12 meses de la firma."}]);
-  heading("Quinta. Gastos y suministros");
-  addText([{text:"Electricidad, agua y basuras son a cargo exclusivo del ARRENDATARIO."}]);
-  heading("Sexta. Fianza");
-  addText([{text:"Al ser renovación, no se constituye fianza adicional."}]);
-  heading("Séptima. Conservación");
-  addText([{text:"El ARRENDATARIO mantendrá el local en perfecto estado. Reparaciones menores a su cargo."}]);
-  heading("Octava. Cesión y subarriendo");
-  addText([{text:"Prohibida la cesión y el subarriendo sin consentimiento escrito del ARRENDADOR."}]);
-  heading("Novena. Legislación");
-  addText([{text:"Se rige por el Código Civil y la Ley de Arrendamientos Urbanos vigente."}]);
-  space();
-  addText([{text:"Y en prueba de conformidad, firman el presente contrato por duplicado en el lugar y fecha indicados."}]);
-  y+=10;
+
+  // ── CLÁUSULAS ──
+  heading("C L Á U S U L A S:");
+  space(1);
+
+  heading("PRIMERA.-");
+  addText([{text:"Joana Solé Santacana, en adelante arrendadora, cede en arrendamiento a "},{text:tenantName,bold:true},{text:', en adelante la arrendataria, quien acepta, "EL TRASTERO", sito en la calle Pou núm. 61 de Calafell, ('},{text:unit,bold:true},{text:"), cuya ubicación, lindes, características, estado de conservación, elementos y servicios comunes y privativos, manifiestan las partes conocer."}],3);
+
+  heading("SEGUNDA.-");
+  addText([{text:"Las partes convienen en establecer la duración de este contrato de UN AÑO, desde el "},{text:`${startDay} de ${startMonth} de ${startYear}`,bold:true},{text:" hasta el "},{text:`${endDay} de ${endMonth} de ${endYear}`,bold:true},{text:". Finalizado el plazo, la arrendataria deberá dejar libre el trastero sin necesidad de requerimiento previo, sin perjuicio de que las partes puedan formalizar nuevo contrato o prórroga expresa."}],2);
+  addText([{text:"La parte arrendataria podrá renunciar libremente al contrato, siempre que la renuncia se comunique fehacientemente con una antelación mínima de tres meses. El incumplimiento comportará una indemnización equivalente al importe de la renta por el período entre el preaviso y los tres meses."}],3);
+
+  heading("TERCERA.-");
+  addText([{text:"Con expresa renuncia al art. 34 de la L.A.U., la extinción del contrato por el transcurso del término convenido no dará derecho a la arrendataria a indemnización alguna a cargo de la arrendadora."}],3);
+
+  heading("CUARTA.-");
+  addText([{text:"Las partes establecen una renta de alquiler de "},{text:`${rent} €`,bold:true},{text:" mensuales. La renta se abonará de forma anticipada durante los cinco primeros días de cada mensualidad en la cuenta núm. "},{text:"ES26 2100 0366 8502 0071 2257",bold:true},{text:", titular de la Sra. Joana Solé, o en la que la misma designe."}],2);
+  addText([{text:"La renta será objeto de actualización anual según el Índice General de Precios al Consumo. La primera actualización se efectuará en "},{text:signMonth,bold:true},{text:", conforme al IPC interanual al mes de diciembre. La renta no se modificará si dicho índice resultare negativo."}],2);
+  addText([{text:"Adicionalmente, la arrendataria participará en los gastos de luz y agua de la nave en la cantidad de "},{text:"2,5 €",bold:true},{text:" mensuales."}],3);
+
+  heading("QUINTA.-");
+  addText([{text:"No se establece ningún tipo de fianza."}],3);
+
+  heading("SEXTA.-");
+  addText([{text:"Si finalizado el contrato la arrendataria no deja libre el trastero, indemnizará a la arrendadora en "},{text:"10,00 € diarios",bold:true},{text:"; si el retraso fuere de dos meses o superior, la indemnización será de "},{text:"20,00 € diarios",bold:true},{text:". Al finalizar el contrato la arrendataria deberá dejar el trastero libre y vacuo a disposición de la arrendadora."}],3);
+
+  heading("SÉPTIMA.-");
+  addText([{text:"Serán a cuenta de la arrendataria todo tipo de impuestos, gravámenes y cargas fiscales y laborales necesarios para la gestión y uso del trastero que se arrienda."}],3);
+
+  heading("OCTAVA.-");
+  addText([{text:"La arrendataria se hace directa y exclusivamente responsable de los daños que puedan ocasionarse a personas o cosas en el trastero arrendado. Se compromete a contratar un Seguro que cubra los riesgos básicos, daños materiales en contenido, robo y responsabilidad civil."}],3);
+
+  heading("NOVENA.-");
+  addText([{text:"Será de cuenta y cargo de la parte arrendadora el IBI y tasa de recogida de basuras."}],3);
+
+  heading("DÉCIMA.-");
+  addText([{text:"Con expresa renuncia al art. 32 de la L.A.U., la arrendataria no podrá subarrendar ni ceder el trastero, total ni parcialmente, sin consentimiento previo y escrito de la arrendadora."}],3);
+
+  heading("DÉCIMO-PRIMERA.-");
+  addText([{text:"El trastero se arrienda en las condiciones actuales. La arrendataria no podrá efectuar obra alguna sin consentimiento expreso escrito de la arrendadora, salvo las propias del mantenimiento y reparación, cuyo coste será siempre a cargo de la arrendataria."}],3);
+
+  heading("DÉCIMO-SEGUNDA.-");
+  addText([{text:"La arrendataria se compromete a conservar y cuidar el trastero con la diligencia de un ordenado comerciante, realizando por su cuenta las obras necesarias de conservación, reparación y reposición de todos los elementos arrendados."}],3);
+
+  heading("DÉCIMO-TERCERA.-");
+  addText([{text:"La arrendataria se obliga a permitir el acceso al trastero a la arrendadora o a la persona u operarios que ésta delegue, durante la vigencia del contrato."}],3);
+
+  heading("DÉCIMO-CUARTA.-");
+  addText([{text:"El trastero no puede, bajo ningún concepto, ser destinado a vivienda propia o de terceras personas, ni a ningún otro uso que el especificado, salvo autorización expresa escrita de los propietarios."}],3);
+
+  heading("DÉCIMO-QUINTA.-");
+  addText([{text:"Queda expresamente prohibido el almacenaje de materias peligrosas o insalubres, así como realizar actividades ilegales. Ello será causa de rescisión automática del contrato."}],3);
+
+  heading("DÉCIMO-SEXTA.-");
+  addText([{text:"La arrendataria renuncia expresamente al art. 25 en relación al art. 31 de la L.A.U., renunciando a sus derechos de adquisición preferente, tanteo y retracto sobre el trastero arrendado."}],3);
+
+  heading("DÉCIMO-SÉPTIMA.-");
+  addText([{text:"La arrendataria responde conjunta y solidariamente, con renuncia al derecho de excusión, división y orden, de todos los compromisos asumidos en el presente contrato y especialmente del pago de la renta."}],3);
+
+  heading("DÉCIMO-OCTAVA.-");
+  addText([{text:"Para cualquier duda respecto a la interpretación o cumplimiento del contrato, ambas partes, con renuncia expresa al fuero de su domicilio, se someten a la jurisdicción y competencia de los Juzgados y Tribunales de "},{text:"El Vendrell",bold:true},{text:"."}],4);
+
+  addText([{text:"Y en prueba de conformidad, las partes afirmándose y ratificándose en el contenido de este contrato, lo firman por duplicado, con promesa de cumplirlo bien y fielmente, en el lugar y fecha indicados en el encabezamiento."}]);
+  space(10);
+
   if(y>250){d.addPage();y=20;}
   d.setFont("helvetica","bold"); d.setFontSize(10);
   d.text("EL ARRENDADOR",lm,y);
-  d.text("EL ARRENDATARIO",115,y);
-  y+=20;
-  d.setFont("helvetica","normal");
+  d.text("LA ARRENDATARIA",115,y);
+  y+=6;
+  d.setFont("helvetica","normal"); d.setFontSize(9);
+  d.text("Fdo.: Joana Solé Santacana",lm,y);
+  d.text(`Fdo.: ${tenantName}`,115,y);
+  y+=22;
   d.text("Firma: _______________________",lm,y);
   d.text("Firma: _______________________",115,y);
-  y+=8;
-  d.setFont("helvetica","bolditalic");
-  d.text("Berta Suau",lm,y);
-  d.text(tenantName,115,y);
+
   const filename=`Contrato_${unit.replace(/ /g,"_")}_${tenantName.replace(/ /g,"_")}_${signYear}.pdf`;
   d.save(filename);
   return filename;
@@ -658,6 +706,7 @@ export default function App() {
     {id:"contratos",icon:"📝",label:t.contracts},
     {id:"facturas",icon:"🧾",label:"Facturas"},
     {id:"recibos",icon:"🖨️",label:"Recibos"},
+    {id:"trasteros",icon:"🏚️",label:"Trasteros"},
   ];
   const tenantNav=[
     {id:"t-home",icon:"🏠",label:t.myHome},
@@ -792,6 +841,7 @@ export default function App() {
       if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
       if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
       if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
+      if(page==="trasteros")return<TrasterosPage t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onCreateTenant={async(data)=>{const id=await createTenant(data);if(id&&data._contractData){await saveContract({...data._contractData,year:data._contractData.signYear||new Date().getFullYear(),date:today(),tenantUid:id});generateContractDocx(data._contractData);}}}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -2758,7 +2808,267 @@ function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
   );
 }
 
-function StatusBadge({status,t}){
+// ─── TRASTEROS PAGE ──────────────────────────────────────────────────
+function TrasterosPage({t, tenants, buildings, onCreateTenant}) {
+  const [modal, setModal] = useState(null);
+  const buildingColors = ["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D"];
+  const naves = buildings.filter(b=>b);
+
+  const getTenantsInBuilding = (building) => tenants.filter(ten => ten.building === building);
+
+  const getTrasteroNum = (unit) => { const m = unit.match(/\d+/); return m ? parseInt(m[0]) : 0; };
+
+  const buildingSlots = (building) => {
+    const occupied = getTenantsInBuilding(building);
+    const slots = [];
+    for(let i=1; i<=20; i++){
+      const unit = `Trastero ${i}`;
+      const tenant = occupied.find(t => getTrasteroNum(t.unit) === i || t.unit === unit);
+      slots.push({num:i, unit, tenant});
+    }
+    return slots;
+  };
+
+  const totalOcupados = naves.reduce((s,b)=>s+getTenantsInBuilding(b).length,0);
+
+  return(
+    <div>
+      <div className="page-hd">
+        <h2>🏚️ Trasteros</h2>
+        <p>Vista por naves — {totalOcupados} ocupados · {naves.length*20-totalOcupados} libres</p>
+      </div>
+
+      {naves.length === 0 && (
+        <div className="card">
+          <p style={{color:"var(--warm)",textAlign:"center",padding:20}}>
+            No hay naves configuradas. Ve a Ajustes de propiedad para añadir naves.
+          </p>
+        </div>
+      )}
+
+      {naves.map((building, bi) => {
+        const slots = buildingSlots(building);
+        const ocupados = slots.filter(s=>s.tenant).length;
+        const color = buildingColors[bi % buildingColors.length];
+        return(
+          <div key={building} style={{marginBottom:20,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+            <div style={{background:color,color:"white",padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18}}>🏢 {building}</div>
+                <div style={{fontSize:13,opacity:.85,marginTop:2}}>{ocupados} ocupados · {20-ocupados} libres</div>
+              </div>
+              <div style={{display:"flex",gap:10,fontSize:12}}>
+                <span style={{background:"rgba(255,255,255,0.2)",padding:"4px 12px",borderRadius:20}}>🔴 {ocupados} ocupados</span>
+                <span style={{background:"rgba(255,255,255,0.2)",padding:"4px 12px",borderRadius:20}}>🟢 {20-ocupados} libres</span>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:10,padding:16,background:"var(--cream)"}}>
+              {slots.map(slot => {
+                const occupied = !!slot.tenant;
+                return(
+                  <div key={slot.num}
+                    onClick={()=>{if(!occupied) setModal({building, unit:slot.unit, num:slot.num});}}
+                    style={{
+                      background: occupied ? "#FFF0EE" : "#F0FAF4",
+                      border:`2px solid ${occupied?"#D94F3D":"#4A9B6F"}`,
+                      borderRadius:12, padding:"12px 8px", textAlign:"center",
+                      cursor: occupied ? "default" : "pointer", transition:"all .2s"
+                    }}
+                    onMouseEnter={e=>{if(!occupied)e.currentTarget.style.transform="scale(1.04)";}}
+                    onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
+                  >
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,fontWeight:700,color:occupied?"#D94F3D":"#4A9B6F"}}>{slot.num}</div>
+                    <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".4px",color:occupied?"#D94F3D":"#4A9B6F",marginBottom:4}}>
+                      {occupied?"🔴 Ocupado":"🟢 Libre"}
+                    </div>
+                    {occupied && (
+                      <div style={{fontSize:11,color:"#444",lineHeight:1.3}}>
+                        <div style={{fontWeight:600}}>{slot.tenant.name}</div>
+                        <div style={{color:"var(--warm)",fontSize:10}}>{slot.tenant.rent}€/mes</div>
+                        {slot.tenant.contractEnd&&<div style={{color:"var(--warm)",fontSize:9,marginTop:1}}>hasta {slot.tenant.contractEnd}</div>}
+                      </div>
+                    )}
+                    {!occupied && <div style={{fontSize:10,color:"#4A9B6F",marginTop:4}}>➕ Añadir</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {modal && (
+        <div className="overlay" onClick={()=>setModal(null)}>
+          <div onClick={e=>e.stopPropagation()}>
+            <NuevoTrasteroModal
+              t={t} building={modal.building} unit={modal.unit}
+              onClose={()=>setModal(null)}
+              onSave={async(data)=>{await onCreateTenant(data);setModal(null);}}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── NUEVO TRASTERO MODAL ─────────────────────────────────────────────
+function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
+  const [step, setStep] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const now = new Date();
+
+  const [form, setForm] = useState({
+    name:"", phone:"", email:"", dni:"", address:"", rent:"", docType:"recibo",
+    signDay:String(now.getDate()), signMonth:monthNames[now.getMonth()], signYear:String(now.getFullYear()),
+    startDay:String(now.getDate()), startMonth:monthNames[now.getMonth()], startYear:String(now.getFullYear()),
+    endDay:String(now.getDate()), endMonth:monthNames[now.getMonth()], endYear:String(now.getFullYear()+1),
+  });
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const toISO=(day,month,year)=>{const idx=monthNames.indexOf((month||"").toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
+
+  const handleSave = async() => {
+    setSaving(true);
+    const contractData={
+      unit, tenantName:form.name, tenantDni:form.dni, tenantAddress:form.address,
+      signDay:form.signDay, signMonth:form.signMonth, signYear:parseInt(form.signYear),
+      startDay:form.startDay, startMonth:form.startMonth, startYear:parseInt(form.startYear),
+      endDay:form.endDay, endMonth:form.endMonth, endYear:parseInt(form.endYear),
+      rent:form.rent, phone:form.phone, email:form.email,
+    };
+    await onSave({
+      name:form.name, unit, phone:form.phone, email:form.email,
+      dni:form.dni, address:form.address, rent:parseFloat(form.rent)||0,
+      docType:form.docType, building,
+      contractStart:toISO(form.startDay,form.startMonth,form.startYear),
+      contractEnd:toISO(form.endDay,form.endMonth,form.endYear),
+      _contractData:contractData,
+    });
+    setSaving(false);
+    setStep(3);
+  };
+
+  const bar=(active,total)=>(
+    <div style={{display:"flex",gap:6,marginBottom:18}}>
+      {Array.from({length:total},(_,i)=>(
+        <div key={i} style={{flex:1,height:4,borderRadius:4,background:i<active?"var(--terra)":"var(--border)"}}/>
+      ))}
+    </div>
+  );
+
+  return(
+    <div className="modal" style={{maxWidth:520}}>
+
+      {step===1&&<>
+        <div className="modal-hd">
+          <h3>🏚️ Nuevo inquilino — {unit}</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        {bar(1,3)}
+        <div style={{background:"var(--cream)",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13}}>
+          📍 <strong>{building}</strong> · {unit}
+        </div>
+        <div className="fg"><label>Nombre completo</label>
+          <input value={form.name} onChange={e=>set("name",e.target.value)} placeholder="Nombre del inquilino"/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>DNI / NIE</label>
+            <input value={form.dni} onChange={e=>set("dni",e.target.value)} placeholder="12345678A"/>
+          </div>
+          <div className="fg"><label>Teléfono</label>
+            <input value={form.phone} onChange={e=>set("phone",e.target.value)}/>
+          </div>
+        </div>
+        <div className="fg"><label>Email</label>
+          <input type="email" value={form.email} onChange={e=>set("email",e.target.value)}/>
+        </div>
+        <div className="fg"><label>Domicilio del inquilino</label>
+          <input value={form.address} onChange={e=>set("address",e.target.value)} placeholder="Calle, nº, ciudad"/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Alquiler €/mes</label>
+            <input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)} placeholder="0"/>
+          </div>
+          <div className="fg"><label>Tipo documento</label>
+            <select value={form.docType} onChange={e=>set("docType",e.target.value)}>
+              <option value="recibo">🧾 Recibo</option>
+              <option value="factura">🧾 Factura</option>
+            </select>
+          </div>
+        </div>
+        <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.name||!form.rent}>
+          Siguiente → Contrato ›
+        </button>
+      </>}
+
+      {step===2&&<>
+        <div className="modal-hd">
+          <h3>📝 Datos del contrato</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        {bar(2,3)}
+        <div style={{fontWeight:600,fontSize:12,marginBottom:8,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fecha de firma</div>
+        <div style={{display:"flex",gap:6,marginBottom:14}}>
+          <input style={{width:50,padding:"8px 10px",border:"1.5px solid var(--border)",borderRadius:8,fontSize:13}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
+          <input style={{flex:1,padding:"8px 10px",border:"1.5px solid var(--border)",borderRadius:8,fontSize:13}} value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
+          <input style={{width:64,padding:"8px 10px",border:"1.5px solid var(--border)",borderRadius:8,fontSize:13}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Inicio contrato</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)} placeholder="día"/>
+              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
+            </div>
+          </div>
+          <div className="fg"><label>Fin contrato</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)} placeholder="día"/>
+              <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
+            </div>
+          </div>
+        </div>
+        <div style={{background:"var(--cream)",borderRadius:12,padding:14,fontSize:13,marginBottom:16}}>
+          <div style={{fontWeight:700,textAlign:"center",marginBottom:8}}>CONTRATO DE ARRENDAMIENTO — {unit.toUpperCase()}</div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.name}</strong></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nave</span><strong>{building}</strong></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
+          <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={saving}>
+            {saving?"⏳ Guardando...":"✅ Guardar y generar contrato"}
+          </button>
+        </div>
+      </>}
+
+      {step===3&&<>
+        <div className="modal-hd">
+          <h3>✅ ¡Inquilino añadido!</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        {bar(3,3)}
+        <div style={{textAlign:"center",padding:"16px 0"}}>
+          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:6}}>Trastero asignado</h3>
+          <p style={{color:"var(--warm)",fontSize:13,marginBottom:18}}>El contrato se ha descargado automáticamente.</p>
+          <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:18,textAlign:"left",fontSize:13}}>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Trastero</span><strong>{unit}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nave</span><strong>{building}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.name}</strong></div>
+          </div>
+          <button className="btn btn-p btn-full" onClick={onClose}>Cerrar</button>
+        </div>
+      </>}
+    </div>
+  );
+}
+
+
   const map={"Pendiente":{bg:"#FDECEA",color:"#D94F3D",label:t?.pending||"Pendiente"},"En revisión":{bg:"#FDF6E3",color:"#D4A853",label:t?.inReview||"En revisión"},"Resuelto":{bg:"#E6F4ED",color:"#4A9B6F",label:t?.resolved||"Resuelto"}};
   const s=map[status]||{bg:"#F0ECE8",color:"#8C7B6E",label:status};
   return<span className="badge" style={{background:s.bg,color:s.color}}>{s.label}</span>;
