@@ -3069,6 +3069,7 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
 }
 
 
+function StatusBadge({status,t}){
   const map={"Pendiente":{bg:"#FDECEA",color:"#D94F3D",label:t?.pending||"Pendiente"},"En revisión":{bg:"#FDF6E3",color:"#D4A853",label:t?.inReview||"En revisión"},"Resuelto":{bg:"#E6F4ED",color:"#4A9B6F",label:t?.resolved||"Resuelto"}};
   const s=map[status]||{bg:"#F0ECE8",color:"#8C7B6E",label:status};
   return<span className="badge" style={{background:s.bg,color:s.color}}>{s.label}</span>;
