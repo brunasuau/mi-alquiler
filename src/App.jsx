@@ -290,15 +290,29 @@ function checkIPC(tenants) {
   tenants.forEach(ten=>{
     if(!ten.contractStart)return;
     const start=new Date(ten.contractStart);
-    if(start.getDate()===now.getDate()&&start.getMonth()===now.getMonth()){
-      const years=now.getFullYear()-start.getFullYear();
-      if(years>0)alerts.push({tenant:ten,years,type:"ipc"});
-      if(years===0)alerts.push({tenant:ten,years:0,type:"signed_today"});
-    }
+
+    // Contrato expirado (contractEnd en el pasado)
     if(ten.contractEnd){
       const end=new Date(ten.contractEnd);
       const daysLeft=Math.ceil((end-now)/(1000*60*60*24));
-      if(daysLeft>=0&&daysLeft<=30)alerts.push({tenant:ten,daysLeft,type:"expiring"});
+      if(daysLeft<0) alerts.push({tenant:ten,type:"expired"});
+      else if(daysLeft<=30) alerts.push({tenant:ten,daysLeft,type:"expiring"});
+    }
+
+    // IPC: mismo mes y año de aniversario, si tiene ipc activado
+    if(ten.ipc==="si"){
+      const years=now.getFullYear()-start.getFullYear();
+      if(years>=1 && now.getMonth()===start.getMonth()){
+        // Solo mostrar si no se ha subido ya este año
+        const lastIpcYear=ten.lastIpcYear||0;
+        if(lastIpcYear < now.getFullYear()){
+          alerts.push({tenant:ten,years,type:"ipc"});
+        }
+      }
+    }
+
+    if(start.getDate()===now.getDate()&&start.getMonth()===now.getMonth()&&start.getFullYear()===now.getFullYear()){
+      alerts.push({tenant:ten,type:"signed_today"});
     }
   });
   return alerts;
@@ -835,7 +849,7 @@ export default function App() {
     showToast("🗑️ Coste eliminado");
   }
 
-  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes,rentRecibo,rentFactura}){
+  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes,rentRecibo,rentFactura,ipc}){
     try{
       const tenantRef=doc(collection(db,"users"));
       await setDoc(tenantRef,{
@@ -846,7 +860,7 @@ export default function App() {
         rentRecibo:docType==="ambos"?parseFloat(rentRecibo)||0:0,
         rentFactura:docType==="ambos"?parseFloat(rentFactura)||0:0,
         fianza:fianza||"no",fianzaAmount:fianza==="si"?parseFloat(fianzaAmount)||0:0,
-        notes:notes||"",
+        notes:notes||"",ipc:ipc||"no",lastIpcYear:0,
         payments:{},costs:[],maintenance:[],lang:"es"
       });
       showToast("✅ Inquilino creado");
@@ -938,6 +952,47 @@ export default function App() {
         showToast("⚠️ Error: "+e.message);
       }
     }}/>;
+    if(modal.type==="renovar"){
+      const ten=modal.tenant;
+      const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+      const now=new Date();
+      const newStart=ten.contractEnd||today();
+      const endDate=new Date(newStart); endDate.setFullYear(endDate.getFullYear()+1);
+      const newEnd=endDate.toISOString().split("T")[0];
+      return(
+        <div className="overlay" onClick={()=>setModal(null)}>
+          <div className="modal" style={{maxWidth:420}} onClick={e=>e.stopPropagation()}>
+            <div className="modal-hd">
+              <h3>🔄 Renovar contrato</h3>
+              <button className="close-btn" onClick={()=>setModal(null)}>✕</button>
+            </div>
+            <div style={{background:"var(--cream)",borderRadius:10,padding:14,marginBottom:16,fontSize:13}}>
+              <div style={{fontWeight:700,marginBottom:8}}>{ten.name} · {ten.unit}</div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nuevo inicio</span><strong>{newStart}</strong></div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nuevo fin</span><strong>{newEnd}</strong></div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{ten.rent} €/mes</strong></div>
+            </div>
+            <p style={{fontSize:12,color:"var(--warm)",marginBottom:16}}>Se renovará por 1 año a partir de la fecha de vencimiento actual.</p>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-o" style={{flex:1}} onClick={async()=>{
+                if(!window.confirm(`¿Eliminar a ${ten.name} y liberar el trastero?`))return;
+                const {deleteDoc}=await import("firebase/firestore");
+                await deleteDoc(doc(db,"users",ten.id));
+                setModal(null);
+                showToast("🗑️ Inquilino eliminado · Trastero libre");
+              }}>🗑️ Eliminar inquilino</button>
+              <button className="btn btn-p" style={{flex:1}} onClick={async()=>{
+                await persist(doc(db,"users",ten.id),{
+                  contractStart:newStart, contractEnd:newEnd, lastIpcYear:0
+                });
+                setModal(null);
+                showToast("✅ Contrato renovado hasta "+newEnd);
+              }}>🔄 Renovar 1 año</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return null;
   };
 
@@ -999,19 +1054,50 @@ export default function App() {
           {!sidebarOpen&&<button className="hamburger-btn" onClick={e=>{e.stopPropagation();setSidebarOpen(true);}}>☰</button>}
           {saving&&<div className="saving">{t.saving}</div>}
           {isOwner&&anniversaries.length>0&&page==="dashboard"&&anniversaries.map((a,i)=>(
-            <div key={i} className="alert-banner">
-              <div className="al-icon">{a.type==="expiring"?"⚠️":"🎂"}</div>
-              <div>
-                <div className="al-title">
-                  {a.type==="ipc"&&`${t.contractAnniversary} · ${a.tenant.name}`}
-                  {a.type==="signed_today"&&`📝 ${a.tenant.name}`}
-                  {a.type==="expiring"&&`${t.contractExpires} · ${a.tenant.name}`}
+            <div key={i} className="alert-banner" style={{alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:12,flex:1}}>
+                <div className="al-icon">
+                  {a.type==="expired"?"🔴":a.type==="expiring"?"⚠️":a.type==="ipc"?"📈":"📝"}
                 </div>
-                <div className="al-sub">
-                  {a.type==="ipc"&&`Lleva ${a.years} año/s · Revisa el IPC · Contrato desde ${a.tenant.contractStart}`}
-                  {a.type==="signed_today"&&`${t.contractSigned} ${a.tenant.contractStart}`}
-                  {a.type==="expiring"&&`${a.tenant.contractEnd} · ${a.daysLeft} días restantes`}
+                <div>
+                  <div className="al-title">
+                    {a.type==="ipc"&&`Subida IPC pendiente · ${a.tenant.name}`}
+                    {a.type==="signed_today"&&`Contrato firmado hoy · ${a.tenant.name}`}
+                    {a.type==="expiring"&&`Contrato próximo a vencer · ${a.tenant.name}`}
+                    {a.type==="expired"&&`Contrato expirado · ${a.tenant.name}`}
+                  </div>
+                  <div className="al-sub">
+                    {a.type==="ipc"&&`${a.years} año/s desde la firma · Subida del 1,5% sobre ${a.tenant.rent}€ → ${(parseFloat(a.tenant.rent)*1.015).toFixed(2)}€`}
+                    {a.type==="signed_today"&&`Firmado hoy ${a.tenant.contractStart}`}
+                    {a.type==="expiring"&&`Vence el ${a.tenant.contractEnd} · Quedan ${a.daysLeft} días`}
+                    {a.type==="expired"&&`Venció el ${a.tenant.contractEnd} · ${a.tenant.unit}`}
+                  </div>
                 </div>
+              </div>
+              <div style={{display:"flex",gap:8,flexShrink:0}}>
+                {a.type==="ipc"&&<>
+                  <button className="btn btn-s btn-sm" onClick={async()=>{
+                    const newRent=parseFloat((parseFloat(a.tenant.rent)*1.015).toFixed(2));
+                    await persist(doc(db,"users",a.tenant.id),{rent:newRent,lastIpcYear:new Date().getFullYear()});
+                    showToast(`✅ Renta actualizada a ${newRent}€`);
+                  }}>✅ Subir 1,5%</button>
+                  <button className="btn btn-o btn-sm" onClick={async()=>{
+                    await persist(doc(db,"users",a.tenant.id),{lastIpcYear:new Date().getFullYear()});
+                    showToast("⏭️ IPC pospuesto hasta el año que viene");
+                  }}>❌ No subir</button>
+                </>}
+                {a.type==="expiring"&&<>
+                  <button className="btn btn-s btn-sm" onClick={()=>setModal({type:"renovar",tenant:a.tenant})}>🔄 Renovar</button>
+                </>}
+                {a.type==="expired"&&<>
+                  <button className="btn btn-s btn-sm" onClick={()=>setModal({type:"renovar",tenant:a.tenant})}>🔄 Renovar</button>
+                  <button className="btn btn-sm" style={{background:"#D94F3D",color:"white"}} onClick={async()=>{
+                    if(!window.confirm(`¿Eliminar a ${a.tenant.name} y liberar el trastero?`))return;
+                    const {deleteDoc}=await import("firebase/firestore");
+                    await deleteDoc(doc(db,"users",a.tenant.id));
+                    showToast("🗑️ Inquilino eliminado · Trastero libre");
+                  }}>🗑️ Eliminar</button>
+                </>}
               </div>
             </div>
           ))}
@@ -3052,7 +3138,7 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
   const now = new Date();
 
   const [form, setForm] = useState({
-    name:"", phone:"", email:"", dni:"", address:"", rent:"", docType:"recibo",
+    name:"", phone:"", email:"", dni:"", address:"", rent:"", docType:"recibo", ipc:"no",
     signDay:String(now.getDate()), signMonth:monthNames[now.getMonth()], signYear:String(now.getFullYear()),
     startDay:String(now.getDate()), startMonth:monthNames[now.getMonth()], startYear:String(now.getFullYear()),
     endDay:String(now.getDate()), endMonth:monthNames[now.getMonth()], endYear:String(now.getFullYear()+1),
@@ -3074,7 +3160,7 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
     await onSave({
       name:form.name, unit, phone:form.phone, email:form.email,
       dni:form.dni, address:form.address, rent:parseFloat(form.rent)||0,
-      docType:form.docType, building,
+      docType:form.docType, building, ipc:form.ipc,
       contractStart:toISO(form.startDay,form.startMonth,form.startYear),
       contractEnd:toISO(form.endDay,form.endMonth,form.endYear),
       _contractData:contractData,
@@ -3131,6 +3217,14 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
               <option value="factura">🧾 Factura</option>
             </select>
           </div>
+        </div>
+        <div className="fg">
+          <label>📈 Subida IPC anual (1,5%)</label>
+          <select value={form.ipc} onChange={e=>set("ipc",e.target.value)}>
+            <option value="no">No — sin revisión anual</option>
+            <option value="si">Sí — recordarme cada año en el mes de firma</option>
+          </select>
+          {form.ipc==="si"&&<div style={{fontSize:11,color:"#4A9B6F",marginTop:4}}>✅ Cada año en el mes de firma recibirás una notificación para aprobar la subida.</div>}
         </div>
         <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.name||!form.rent}>
           Siguiente → Contrato ›
