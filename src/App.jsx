@@ -116,7 +116,8 @@ function generateAnnualExcel(tenants, year) {
 
 function generateContractDocx(data) {
   const { unit, tenantName, tenantDni, tenantAddress, signDay, signMonth, signYear,
-          startDay, startMonth, startYear, endDay, endMonth, endYear, rent } = data;
+          startDay, startMonth, startYear, endDay, endMonth, endYear, rent,
+          ownerSig, tenantSig } = data;
   const d = new jsPDF({ format:"a4", unit:"mm" });
   const lm=20, rm=190, maxW=rm-lm;
   let y=20;
@@ -256,17 +257,28 @@ function generateContractDocx(data) {
   addText([{text:"Y en prueba de conformidad, las partes afirmándose y ratificándose en el contenido de este contrato, lo firman por duplicado, con promesa de cumplirlo bien y fielmente, en el lugar y fecha indicados en el encabezamiento."}]);
   space(10);
 
-  if(y>250){d.addPage();y=20;}
+  if(y>230){d.addPage();y=20;}
   d.setFont("helvetica","bold"); d.setFontSize(10);
   d.text("EL ARRENDADOR",lm,y);
   d.text("LA ARRENDATARIA",115,y);
-  y+=6;
+  y+=5;
   d.setFont("helvetica","normal"); d.setFontSize(9);
   d.text("Fdo.: Joana Solé Santacana",lm,y);
   d.text(`Fdo.: ${tenantName}`,115,y);
-  y+=22;
-  d.text("Firma: _______________________",lm,y);
-  d.text("Firma: _______________________",115,y);
+  y+=4;
+
+  // Draw signature boxes
+  d.setDrawColor(200); d.setFillColor(250,250,250);
+  d.roundedRect(lm, y, 75, 30, 2, 2, "FD");
+  d.roundedRect(115, y, 75, 30, 2, 2, "FD");
+
+  // Embed signatures if provided
+  if(ownerSig){
+    try{ d.addImage(ownerSig,"PNG",lm+2,y+1,71,28); }catch(e){}
+  }
+  if(tenantSig){
+    try{ d.addImage(tenantSig,"PNG",115+2,y+1,71,28); }catch(e){}
+  }
 
   const filename=`Contrato_${unit.replace(/ /g,"_")}_${tenantName.replace(/ /g,"_")}_${signYear}.pdf`;
   d.save(filename);
@@ -2557,13 +2569,7 @@ function generateReceiptPDF(rec){
   pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=8;
   pdf.setFontSize(10);pdf.setFont("helvetica","bold");pdf.text("CONCEPTO",M,y);y+=6;
   pdf.setFont("helvetica","normal");pdf.text(rec.concept||"Alquiler mensual",M,y);y+=10;
-  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=8;
-
-  pdf.setFillColor(42,36,32);pdf.rect(M,y-4,W-M*2,14,"F");
-  pdf.setTextColor(255,255,255);pdf.setFont("helvetica","bold");pdf.setFontSize(14);
-  pdf.text("IMPORTE TOTAL",M+4,y+5);
-  pdf.text(`€${parseFloat(rec.amount).toFixed(2)}`,W-M-4,y+5,{align:"right"});
-  pdf.setTextColor(0,0,0);y+=22;
+  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=12;
 
   pdf.setFontSize(9);pdf.setFont("helvetica","normal");
   pdf.text("He recibido de la parte arrendataria la cantidad indicada en concepto de renta.",M,y);y+=5;
@@ -2977,9 +2983,71 @@ function TrasterosPage({t, tenants, buildings, onCreateTenant, trasteros, onAddT
 
 
 // ─── NUEVO TRASTERO MODAL ─────────────────────────────────────────────
+function SignaturePad({label, onSign, signed}) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  const lastPos = useRef(null);
+
+  const getPos = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+  };
+
+  const start = (e) => {
+    e.preventDefault();
+    drawing.current = true;
+    lastPos.current = getPos(e, canvasRef.current);
+  };
+  const move = (e) => {
+    e.preventDefault();
+    if(!drawing.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const pos = getPos(e, canvas);
+    ctx.beginPath();
+    ctx.moveTo(lastPos.current.x, lastPos.current.y);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.strokeStyle = "#1A1612";
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.stroke();
+    lastPos.current = pos;
+    onSign(canvas.toDataURL());
+  };
+  const end = () => { drawing.current = false; };
+
+  const clear = (e) => {
+    e.stopPropagation();
+    const canvas = canvasRef.current;
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    onSign(null);
+  };
+
+  return(
+    <div style={{marginBottom:16}}>
+      <div style={{fontSize:12,fontWeight:600,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px",marginBottom:6}}>{label}</div>
+      <div style={{position:"relative",border:`2px solid ${signed?"#4A9B6F":"var(--border)"}`,borderRadius:10,background:"#fafafa",transition:"border-color .2s"}}>
+        <canvas
+          ref={canvasRef} width={460} height={120}
+          style={{display:"block",width:"100%",height:120,borderRadius:8,touchAction:"none",cursor:"crosshair"}}
+          onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+          onTouchStart={start} onTouchMove={move} onTouchEnd={end}
+        />
+        <button onClick={clear} style={{position:"absolute",top:6,right:6,background:"rgba(255,255,255,0.9)",border:"1px solid var(--border)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--warm)"}}>
+          Borrar
+        </button>
+        {!signed && <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:"#ccc",fontSize:13,pointerEvents:"none",textAlign:"center"}}>✍️ Firmar aquí</div>}
+      </div>
+    </div>
+  );
+}
+
 function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [ownerSig, setOwnerSig] = useState(null);
+  const [tenantSig, setTenantSig] = useState(null);
   const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
   const now = new Date();
 
@@ -3001,6 +3069,7 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
       startDay:form.startDay, startMonth:form.startMonth, startYear:parseInt(form.startYear),
       endDay:form.endDay, endMonth:form.endMonth, endYear:parseInt(form.endYear),
       rent:form.rent, phone:form.phone, email:form.email,
+      ownerSig, tenantSig,
     };
     await onSave({
       name:form.name, unit, phone:form.phone, email:form.email,
@@ -3011,7 +3080,7 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
       _contractData:contractData,
     });
     setSaving(false);
-    setStep(3);
+    setStep(4);
   };
 
   const bar=(active,total)=>(
@@ -3025,12 +3094,13 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
   return(
     <div className="modal" style={{maxWidth:520}}>
 
+      {/* PASO 1: Datos inquilino */}
       {step===1&&<>
         <div className="modal-hd">
           <h3>🏚️ Nuevo inquilino — {unit}</h3>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
-        {bar(1,3)}
+        {bar(1,4)}
         <div style={{background:"var(--cream)",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13}}>
           📍 <strong>{building}</strong> · {unit}
         </div>
@@ -3067,12 +3137,13 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
         </button>
       </>}
 
+      {/* PASO 2: Fechas contrato */}
       {step===2&&<>
         <div className="modal-hd">
           <h3>📝 Datos del contrato</h3>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
-        {bar(2,3)}
+        {bar(2,4)}
         <div style={{fontWeight:600,fontSize:12,marginBottom:8,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fecha de firma</div>
         <div style={{display:"flex",gap:6,marginBottom:14}}>
           <input style={{width:50,padding:"8px 10px",border:"1.5px solid var(--border)",borderRadius:8,fontSize:13}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
@@ -3096,7 +3167,6 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
           </div>
         </div>
         <div style={{background:"var(--cream)",borderRadius:12,padding:14,fontSize:13,marginBottom:16}}>
-          <div style={{fontWeight:700,textAlign:"center",marginBottom:8}}>CONTRATO DE ARRENDAMIENTO — {unit.toUpperCase()}</div>
           <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.name}</strong></div>
           <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nave</span><strong>{building}</strong></div>
           <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
@@ -3104,22 +3174,42 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
         </div>
         <div style={{display:"flex",gap:8}}>
           <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
-          <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={saving}>
-            {saving?"⏳ Guardando...":"✅ Guardar y generar contrato"}
+          <button className="btn btn-p" style={{flex:1}} onClick={()=>setStep(3)}>
+            Siguiente → Firmas ›
           </button>
         </div>
       </>}
 
+      {/* PASO 3: Firmas táctiles */}
       {step===3&&<>
         <div className="modal-hd">
-          <h3>✅ ¡Inquilino añadido!</h3>
+          <h3>✍️ Firmas</h3>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
-        {bar(3,3)}
+        {bar(3,4)}
+        <p style={{fontSize:13,color:"var(--warm)",marginBottom:16}}>Firmar con el dedo en cada recuadro.</p>
+        <SignaturePad label="Firma del arrendador — Berta Suau" onSign={setOwnerSig} signed={!!ownerSig}/>
+        <SignaturePad label={`Firma del arrendatario — ${form.name}`} onSign={setTenantSig} signed={!!tenantSig}/>
+        <div style={{display:"flex",gap:8,marginTop:8}}>
+          <button className="btn btn-o" onClick={()=>setStep(2)}>‹ Volver</button>
+          <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={!ownerSig||!tenantSig||saving}>
+            {saving?"⏳ Guardando...":"✅ Guardar y generar contrato"}
+          </button>
+        </div>
+        {(!ownerSig||!tenantSig)&&<p style={{fontSize:11,color:"var(--warm)",textAlign:"center",marginTop:8}}>Las dos firmas son obligatorias</p>}
+      </>}
+
+      {/* PASO 4: Confirmación */}
+      {step===4&&<>
+        <div className="modal-hd">
+          <h3>✅ ¡Contrato firmado!</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        {bar(4,4)}
         <div style={{textAlign:"center",padding:"16px 0"}}>
           <div style={{fontSize:56,marginBottom:12}}>🎉</div>
           <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:6}}>Trastero asignado</h3>
-          <p style={{color:"var(--warm)",fontSize:13,marginBottom:18}}>El contrato se ha descargado automáticamente.</p>
+          <p style={{color:"var(--warm)",fontSize:13,marginBottom:18}}>El contrato se ha descargado con las firmas incluidas.</p>
           <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:18,textAlign:"left",fontSize:13}}>
             <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Trastero</span><strong>{unit}</strong></div>
             <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nave</span><strong>{building}</strong></div>
