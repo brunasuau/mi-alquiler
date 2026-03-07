@@ -877,7 +877,7 @@ export default function App() {
     if(isOwner){
       if(page==="dashboard")return<Dashboard t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})}/>;
       if(page==="tenants")return<Tenants t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
-      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onDeleteCost={deleteCost}/>;
+      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onAddCostDirect={addCost} onDeleteCost={deleteCost}/>;
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
@@ -1362,7 +1362,7 @@ function Tenants({t,tenants,onSelect,onNew,onEdit,buildings=[]}){
 }
 
 function Finances(props){
-  const {t,tenants,onToggle,onAddCost,onDeleteCost}=props;
+  const {t,tenants,onToggle,onAddCost,onAddCostDirect,onDeleteCost}=props;
   const now=new Date();
   const startYear=2024; const endYear=startYear+15;
   const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -1601,18 +1601,21 @@ function Finances(props){
         </div>
       )}
 
-      {tab==="extracto"&&<ExtractoTab tenants={tenants} onToggle={onToggle} onAddCost={onAddCost} monthsOfYear={monthsOfYear} selYear={selYear}/>}
+      {tab==="extracto"&&<ExtractoTab tenants={tenants} onToggle={onToggle} onAddCost={onAddCostDirect||onAddCost} monthsOfYear={monthsOfYear} selYear={selYear}/>}
     </div>
   );
 }
 
 // ─── EXTRACTO BANCARIO ─────────────────────────────────────────────────────
-function ExtractoTab({tenants, onToggle, monthsOfYear}) {
+function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear}) {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [movimientos, setMovimientos] = useState([]);
   const [applied, setApplied] = useState({});
-  const [selMonth, setSelMonth] = useState(monthsOfYear[new Date().getMonth()]||monthsOfYear[0]);
+  const [gastoPanel, setGastoPanel] = useState(null); // index of open gasto panel
+  const [gastoForm, setGastoForm] = useState({tenantId:"general", tipo:"suministro", nota:""});
+  const [asignarPanel, setAsignarPanel] = useState(null);
+  const [asignarTenantId, setAsignarTenantId] = useState("");
 
   const parseExtracto = (text) => {
     const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>5);
@@ -1706,13 +1709,45 @@ function ExtractoTab({tenants, onToggle, monthsOfYear}) {
       const mov=movimientos[i];
       if(mov.tipo==="ingreso"&&mov.tenantMatch&&!applied[i]){
         const ten=tenants.find(t=>t.name===mov.tenantMatch);
-        if(ten&&!((ten.payments||{})[selMonth]?.paid)){ await onToggle(ten.id,selMonth); count++; }
+        const movMonth=fechaToMonth(mov.fecha);
+        if(ten&&!((ten.payments||{})[movMonth]?.paid)){ await onToggle(ten.id,movMonth); count++; }
       }
     }
     const a={};
     movimientos.forEach((_,i)=>{if(movimientos[i].tipo==="ingreso"&&movimientos[i].tenantMatch)a[i]=true;});
     setApplied(a);
-    alert(`✅ ${count} pagos marcados como cobrados en ${selMonth}`);
+    alert(`✅ ${count} pagos marcados como cobrados`);
+  };
+
+  const saveGasto = async(mov, idx) => {
+    const movMonth = fechaToMonth(mov.fecha);
+    const cost = {
+      icon: gastoForm.tipo==="suministro"?"💡":gastoForm.tipo==="mantenimiento"?"🔧":"📋",
+      name: gastoForm.nota || mov.descripcion,
+      month: movMonth,
+      amount: mov.importe,
+      tipo: gastoForm.tipo,
+      nota: gastoForm.nota || mov.descripcion,
+    };
+    if(gastoForm.tenantId === "general"){
+      // Save to first tenant as general cost (workaround — uses prop-level tenant)
+      const firstTen = tenants[0];
+      if(firstTen) await onAddCost(firstTen.id, {...cost, name:"[General] "+cost.name});
+    } else {
+      await onAddCost(gastoForm.tenantId, cost);
+    }
+    setApplied(a=>({...a,[idx]:"gasto"}));
+    setGastoPanel(null);
+  };
+
+  // Convert DD/MM/YYYY date to month string like "Enero 2026"
+  const fechaToMonth = (fecha) => {
+    const mNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+    const parts = fecha.split(/[\/\-]/);
+    if(parts.length<3) return selMonth;
+    const m = parseInt(parts[1])-1;
+    const y = parts[2].length===2?"20"+parts[2]:parts[2];
+    return `${mNames[m]||mNames[0]} ${y}`;
   };
 
   const totalIngresos=movimientos.filter(m=>m.tipo==="ingreso").reduce((s,m)=>s+m.importe,0);
@@ -1726,16 +1761,13 @@ function ExtractoTab({tenants, onToggle, monthsOfYear}) {
       <div className="card" style={{marginBottom:16}}>
         <div className="card-title">🏦 Extracto bancario</div>
         <p style={{fontSize:13,color:"var(--warm)",marginBottom:14}}>
-          Sube el extracto en <strong>CSV o TXT</strong>. La app detecta movimientos y cruza los importes con las rentas de tus inquilinos.
+          Sube el extracto en <strong>CSV o TXT</strong>. La app detecta movimientos y los cruza con tus inquilinos. El mes se asigna automáticamente según la fecha de cada transferencia.
         </p>
         <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
           <label style={{display:"flex",alignItems:"center",gap:8,padding:"10px 18px",background:"var(--terra)",color:"white",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:600}}>
             📎 {file?file.name:"Seleccionar CSV / TXT"}
             <input type="file" accept=".csv,.txt" onChange={handleFile} style={{display:"none"}}/>
           </label>
-          <select value={selMonth} onChange={e=>setSelMonth(e.target.value)} style={{padding:"10px 12px",borderRadius:10,border:"1.5px solid var(--border)",fontSize:13}}>
-            {monthsOfYear.map(m=><option key={m} value={m}>{m}</option>)}
-          </select>
           {loading&&<span style={{fontSize:13,color:"var(--warm)"}}>⏳ Leyendo...</span>}
         </div>
         {file&&movimientos.length===0&&!loading&&(
@@ -1759,39 +1791,102 @@ function ExtractoTab({tenants, onToggle, monthsOfYear}) {
             ))}
           </div>
 
-          {movimientos.some(m=>m.tipo==="ingreso"&&m.tenantMatch)&&(
-            <div style={{marginBottom:16,display:"flex",gap:10,alignItems:"center",background:"#F0FAF4",border:"1.5px solid #4A9B6F",borderRadius:12,padding:"12px 16px",flexWrap:"wrap"}}>
-              <div style={{flex:1,fontSize:13}}>
-                <strong style={{color:"#4A9B6F"}}>{movimientos.filter(m=>m.tipo==="ingreso"&&m.tenantMatch).length} pagos identificados</strong>
-                <span style={{color:"var(--warm)",marginLeft:8}}>para <strong>{selMonth}</strong></span>
-              </div>
-              <button className="btn btn-p" onClick={applyAll}>✅ Marcar todos cobrados</button>
-            </div>
-          )}
-
           <div className="card">
             <div className="card-title">📋 Movimientos ({movimientos.length})</div>
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {movimientos.map((mov,i)=>{
                 const isIng=mov.tipo==="ingreso";
                 const ten=mov.tenantMatch?tenants.find(t=>t.name===mov.tenantMatch):null;
-                const alreadyPaid=ten&&((ten.payments||{})[selMonth]?.paid);
+                const movMonth = fechaToMonth(mov.fecha);
+                const alreadyPaid=ten&&((ten.payments||{})[movMonth]?.paid);
                 const wasApplied=applied[i];
+                const gastoGuardado=wasApplied==="gasto";
                 return(
-                  <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:10,border:`1.5px solid ${isIng?"#C8E6C9":"#FFCDD2"}`,background:isIng?"#F9FFF9":"#FFF8F8",flexWrap:"wrap"}}>
-                    <div style={{fontSize:18}}>{isIng?"💚":"🔴"}</div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:600,fontSize:13,marginBottom:3}}>{mov.descripcion}</div>
-                      <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                        <span style={{fontSize:11,color:"var(--warm)"}}>{mov.fecha}</span>
-                        <span style={{fontSize:11,background:cColors[mov.concepto],color:"white",padding:"2px 8px",borderRadius:20}}>{cLabels[mov.concepto]}</span>
-                        {mov.tenantMatch&&<span style={{fontSize:11,background:"#E8F5E9",color:"#2E7D32",padding:"2px 8px",borderRadius:20,fontWeight:600}}>🏠 {mov.tenantMatch}</span>}
-                        {(alreadyPaid||wasApplied)&&<span style={{fontSize:11,color:"#4A9B6F",fontWeight:600}}>✅ Cobrado</span>}
+                  <div key={i}>
+                    <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:(gastoPanel===i||asignarPanel===i)?"10px 10px 0 0":"10px",border:`1.5px solid ${isIng?"#C8E6C9":"#FFCDD2"}`,background:isIng?"#F9FFF9":"#FFF8F8",flexWrap:"wrap"}}>
+                      <div style={{fontSize:18}}>{isIng?"💚":"🔴"}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontWeight:600,fontSize:13,marginBottom:3}}>{mov.descripcion}</div>
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                          <span style={{fontSize:11,color:"var(--warm)"}}>{mov.fecha}</span>
+                          <span style={{fontSize:11,background:"#E3F0FF",color:"#1A5FB4",padding:"2px 8px",borderRadius:20,fontWeight:600}}>📅 {movMonth}</span>
+                          <span style={{fontSize:11,background:cColors[mov.concepto],color:"white",padding:"2px 8px",borderRadius:20}}>{cLabels[mov.concepto]}</span>
+                          {mov.tenantMatch&&<span style={{fontSize:11,background:"#E8F5E9",color:"#2E7D32",padding:"2px 8px",borderRadius:20,fontWeight:600}}>🏠 {mov.tenantMatch}</span>}
+                          {(alreadyPaid||wasApplied===true)&&<span style={{fontSize:11,color:"#4A9B6F",fontWeight:600}}>✅ Cobrado {movMonth}</span>}
+                          {gastoGuardado&&<span style={{fontSize:11,color:"#4F46E5",fontWeight:600}}>✅ Gasto guardado</span>}
+                        </div>
                       </div>
+                      <div style={{fontWeight:700,fontSize:15,color:isIng?"#4A9B6F":"#D94F3D",flexShrink:0}}>{isIng?"+":"-"}{mov.importe.toFixed(2)}€</div>
+                      {/* Ingreso identificado → marcar cobrado directo */}
+                      {isIng&&ten&&!alreadyPaid&&wasApplied!==true&&(
+                        <button className="btn btn-s btn-sm" onClick={async()=>{
+                          await onToggle(ten.id, movMonth);
+                          setApplied(a=>({...a,[i]:true}));
+                        }}>✅ Marcar cobrado</button>
+                      )}
+                      {/* Ingreso NO identificado → asignar manualmente */}
+                      {isIng&&!ten&&wasApplied!==true&&(
+                        <button className="btn btn-sm" style={{background:"#F59E0B",color:"white"}}
+                          onClick={()=>{setAsignarPanel(asignarPanel===i?null:i);setAsignarTenantId(tenants[0]?.id||"");setGastoPanel(null);}}>
+                          🔍 Asignar
+                        </button>
+                      )}
+                      {!isIng&&!gastoGuardado&&(
+                        <button className="btn btn-sm" style={{background:"#4F46E5",color:"white"}}
+                          onClick={()=>{setGastoPanel(gastoPanel===i?null:i);setGastoForm({tenantId:"general",tipo:mov.concepto==="otro"?"suministro":mov.concepto,nota:mov.descripcion});setAsignarPanel(null);}}>
+                          💾 Guardar gasto
+                        </button>
+                      )}
                     </div>
-                    <div style={{fontWeight:700,fontSize:15,color:isIng?"#4A9B6F":"#D94F3D",flexShrink:0}}>{isIng?"+":"-"}{mov.importe.toFixed(2)}€</div>
-                    {isIng&&ten&&!alreadyPaid&&!wasApplied&&(
-                      <button className="btn btn-s btn-sm" onClick={async()=>{await onToggle(ten.id,selMonth);setApplied(a=>({...a,[i]:true}));}}>✅ Marcar cobrado</button>
+                    {/* Panel asignar ingreso manualmente */}
+                    {isIng&&asignarPanel===i&&(
+                      <div style={{border:"1.5px solid #FDE68A",borderTop:"none",borderRadius:"0 0 10px 10px",background:"#FFFBEB",padding:"12px 14px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+                        <div style={{fontSize:13,color:"#92400E",fontWeight:600,width:"100%"}}>🔍 ¿De qué inquilino es esta transferencia de {mov.importe.toFixed(2)}€?</div>
+                        <div className="fg" style={{flex:1,minWidth:180,marginBottom:0}}>
+                          <label style={{fontSize:11}}>Inquilino</label>
+                          <select value={asignarTenantId} onChange={e=>setAsignarTenantId(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}>
+                            {tenants.map(t=><option key={t.id} value={t.id}>🏠 {t.name} · {t.unit} · {t.rent}€</option>)}
+                          </select>
+                        </div>
+                        <div style={{display:"flex",gap:6}}>
+                          <button className="btn btn-o btn-sm" onClick={()=>setAsignarPanel(null)}>Cancelar</button>
+                          <button className="btn btn-sm" style={{background:"#4A9B6F",color:"white"}} onClick={async()=>{
+                            if(!asignarTenantId) return;
+                            await onToggle(asignarTenantId, movMonth);
+                            setApplied(a=>({...a,[i]:true}));
+                            setAsignarPanel(null);
+                          }}>✅ Confirmar cobrado</button>
+                        </div>
+                      </div>
+                    )}
+                    {/* Inline gasto panel */}
+                    {!isIng&&gastoPanel===i&&(
+                      <div style={{border:"1.5px solid #FFCDD2",borderTop:"none",borderRadius:"0 0 10px 10px",background:"#FFF0F0",padding:"12px 14px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+                        <div className="fg" style={{flex:1,minWidth:140,marginBottom:0}}>
+                          <label style={{fontSize:11}}>Asignar a</label>
+                          <select value={gastoForm.tenantId} onChange={e=>setGastoForm(f=>({...f,tenantId:e.target.value}))} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}>
+                            <option value="general">🏢 Gasto general propiedad</option>
+                            {tenants.map(t=><option key={t.id} value={t.id}>🏠 {t.name} · {t.unit}</option>)}
+                          </select>
+                        </div>
+                        <div className="fg" style={{flex:1,minWidth:130,marginBottom:0}}>
+                          <label style={{fontSize:11}}>Tipo</label>
+                          <select value={gastoForm.tipo} onChange={e=>setGastoForm(f=>({...f,tipo:e.target.value}))} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}>
+                            <option value="suministro">💡 Suministro</option>
+                            <option value="mantenimiento">🔧 Mantenimiento</option>
+                            <option value="inversion">🏗️ Inversión</option>
+                            <option value="otro">📋 Otro</option>
+                          </select>
+                        </div>
+                        <div className="fg" style={{flex:2,minWidth:160,marginBottom:0}}>
+                          <label style={{fontSize:11}}>Nota</label>
+                          <input value={gastoForm.nota} onChange={e=>setGastoForm(f=>({...f,nota:e.target.value}))} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}/>
+                        </div>
+                        <div style={{display:"flex",gap:6,marginBottom:0}}>
+                          <button className="btn btn-o btn-sm" onClick={()=>setGastoPanel(null)}>Cancelar</button>
+                          <button className="btn btn-sm" style={{background:"#4F46E5",color:"white"}} onClick={()=>saveGasto(mov,i)}>💾 Guardar</button>
+                        </div>
+                      </div>
                     )}
                   </div>
                 );
