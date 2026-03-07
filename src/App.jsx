@@ -9,6 +9,7 @@ import {
   doc, setDoc, getDoc, collection, query, where,
   onSnapshot, addDoc, orderBy, serverTimestamp, updateDoc
 } from "firebase/firestore";
+import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 
 const OWNER_EMAIL = "bertasuau@gmail.com";
@@ -56,20 +57,262 @@ function generateReceipt({ tenantName, unit, month, date }) {
   d.save(`Rebut_${tenantName.replace(/ /g,"_")}_${month.replace(/ /g,"_")}.pdf`);
 }
 
+function generateAnnualExcel(tenants, year) {
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const months=monthNames.map(m=>`${m} ${year}`);
+  const wb=XLSX.utils.book_new();
+
+  // ── SHEET 1: RESUMEN ANUAL ──
+  const resumen=[["RESUMEN ANUAL "+year,"","",""],["","","",""],
+    ["Mes","Ingresos (€)","Gastos (€)","Inversiones (€)","Profit (€)"]];
+  let totI=0,totG=0,totInv=0;
+  months.forEach(m=>{
+    const ing=tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((s,t)=>s+(t.rent||0),0);
+    const gas=tenants.reduce((s,t)=>s+(t.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const inv=tenants.reduce((s,t)=>s+(t.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    totI+=ing;totG+=gas;totInv+=inv;
+    resumen.push([m,ing,gas,inv,ing-gas-inv]);
+  });
+  resumen.push(["","","","",""]);
+  resumen.push(["TOTAL",totI,totG,totInv,totI-totG-totInv]);
+  const ws1=XLSX.utils.aoa_to_sheet(resumen);
+  ws1["!cols"]=[{wch:20},{wch:15},{wch:15},{wch:16},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,ws1,"Resumen");
+
+  // ── SHEET 2: PAGOS ──
+  const pagosData=[["PAGOS INQUILINOS "+year],["Inquilino","Piso","Alquiler/mes",...months]];
+  tenants.forEach(ten=>{
+    const row=[ten.name,ten.unit,ten.rent+"€"];
+    months.forEach(m=>{const p=(ten.payments||{})[m];row.push(p?.paid?"✓ "+p.date:"✗ Pendiente");});
+    pagosData.push(row);
+  });
+  const ws2=XLSX.utils.aoa_to_sheet(pagosData);
+  ws2["!cols"]=[{wch:20},{wch:15},{wch:14},...months.map(()=>({wch:14}))];
+  XLSX.utils.book_append_sheet(wb,ws2,"Pagos");
+
+  // ── SHEET 3: GASTOS E INVERSIONES ──
+  const gastosData=[["GASTOS E INVERSIONES "+year],["Inquilino","Concepto","Tipo","Mes","Importe (€)","Nota"]];
+  tenants.forEach(ten=>{
+    (ten.costs||[]).filter(c=>c.month?.includes(String(year))).forEach(c=>{
+      gastosData.push([ten.name,c.icon+" "+c.name,c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto",c.month,c.amount,c.nota||""]);
+    });
+  });
+  const ws3=XLSX.utils.aoa_to_sheet(gastosData);
+  ws3["!cols"]=[{wch:20},{wch:20},{wch:14},{wch:16},{wch:12},{wch:30}];
+  XLSX.utils.book_append_sheet(wb,ws3,"Gastos");
+
+  // ── SHEET 4: INQUILINOS ──
+  const tenantsData=[["INQUILINOS "+year],["Nombre","Piso","Teléfono","Email","Alquiler","Inicio contrato","Fin contrato"]];
+  tenants.forEach(ten=>{
+    tenantsData.push([ten.name,ten.unit,ten.phone||"",ten.email||"",ten.rent+"€",ten.contractStart||"",ten.contractEnd||""]);
+  });
+  const ws4=XLSX.utils.aoa_to_sheet(tenantsData);
+  ws4["!cols"]=[{wch:22},{wch:15},{wch:14},{wch:26},{wch:12},{wch:16},{wch:16}];
+  XLSX.utils.book_append_sheet(wb,ws4,"Inquilinos");
+
+  XLSX.writeFile(wb,`MiAlquiler_Resumen_${year}.xlsx`);
+  return {year, filename:`MiAlquiler_Resumen_${year}.xlsx`, date:new Date().toLocaleDateString("es-ES"), totI, totG, totInv, profit:totI-totG-totInv};
+}
+
+function generateContractDocx(data) {
+  const { unit, tenantName, tenantDni, tenantAddress, signDay, signMonth, signYear,
+          startDay, startMonth, startYear, endDay, endMonth, endYear, rent,
+          ownerSig, tenantSig } = data;
+  const d = new jsPDF({ format:"a4", unit:"mm" });
+  const lm=20, rm=190, maxW=rm-lm;
+  let y=20;
+  const lh=6;
+
+  function addText(segments, extraSpacing=2) {
+    const lines=[[]];
+    segments.forEach(seg=>{
+      const words=seg.text.split(" ");
+      words.forEach((word,wi)=>{
+        const w=word+(wi<words.length-1?" ":"");
+        d.setFont("helvetica", seg.bold?"bold":"normal");
+        d.setFontSize(10);
+        const ww=d.getTextWidth(w);
+        const lineW=d.getTextWidth(lines[lines.length-1].map(s=>s.text).join(""));
+        if(lineW+ww>maxW && lines[lines.length-1].length>0){
+          lines.push([{text:w,bold:seg.bold}]);
+        } else {
+          const last=lines[lines.length-1];
+          if(last.length>0&&last[last.length-1].bold===seg.bold){
+            last[last.length-1].text+=w;
+          } else { last.push({text:w,bold:seg.bold}); }
+        }
+      });
+    });
+    lines.forEach(line=>{
+      if(y>278){d.addPage();y=20;}
+      let cx=lm;
+      line.forEach(seg=>{
+        d.setFont("helvetica",seg.bold?"bold":"normal");
+        d.setFontSize(10);
+        d.text(seg.text,cx,y);
+        cx+=d.getTextWidth(seg.text);
+      });
+      y+=lh;
+    });
+    y+=extraSpacing;
+  }
+
+  function heading(text) {
+    if(y>272){d.addPage();y=20;}
+    d.setFont("helvetica","bold"); d.setFontSize(10);
+    d.text(text,lm,y); y+=lh+1;
+  }
+  function space(n=3){y+=n;}
+  function hr(){d.setDrawColor(180,180,180);d.line(lm,y,rm,y);y+=5;}
+
+  // ── TÍTULOS ──
+  d.setFont("helvetica","bold"); d.setFontSize(11);
+  d.text("CONTRATO", 105, y, {align:"center"}); y+=lh+2;
+  d.setFontSize(10);
+  d.text("CONTRATO DE ALQUILER PARA USO DISTINTO A VIVIENDA", 105, y, {align:"center"}); y+=lh+2;
+  hr();
+
+  addText([{text:`En Calafell, a ${signDay} de ${signMonth} de ${signYear}`}]);
+  space();
+
+  // ── REUNIDOS ──
+  heading("R E U N I D O S:");
+  addText([{text:"De una parte, "},{text:"Joana Solé Santacana",bold:true},{text:", mayor de edad, con domicilio a estos efectos en el Passeig Marítim Sant Joan de Déu núm. 90, Esc. B, 5º 2ª de Calafell, provista de DNI número "},{text:"39618190T",bold:true},{text:"."}]);
+  space(2);
+  addText([{text:"De otra, Sr/a. "},{text:tenantName,bold:true},{text:", mayor de edad, con domicilio a estos efectos en "},{text:tenantAddress||"—",bold:true},{text:", provista de DNI número "},{text:tenantDni||"—",bold:true},{text:"."}]);
+  space(2);
+  addText([{text:"Después de reconocerse mutuamente la capacidad legal para obligar y obligarse, haciéndolo libre y voluntariamente,"}]);
+  space();
+
+  // ── MANIFIESTAN ──
+  heading("M A N I F I E S T A N:");
+  addText([{text:"I.- Que Joana Solé Santacana por sus justos y legítimos títulos resulta ser titular del trastero número "},{text:unit,bold:true},{text:" situado en la Nave Industrial sita en "},{text:"C/ Pou, 61 Calafell (Tarragona)",bold:true},{text:"."}]);
+  space(2);
+  addText([{text:"II.- Que la arrendataria está interesada en el arrendamiento de dicho Trastero para almacenar en el mismo existencias y/o utensilios propios."}]);
+  space(2);
+  addText([{text:"Que en virtud de lo referido, acuerdan formalizar el presente contrato por las siguientes,"}]);
+  space();
+
+  // ── CLÁUSULAS ──
+  heading("C L Á U S U L A S:");
+  space(1);
+
+  heading("PRIMERA.-");
+  addText([{text:"Joana Solé Santacana, en adelante arrendadora, cede en arrendamiento a "},{text:tenantName,bold:true},{text:', en adelante la arrendataria, quien acepta, "EL TRASTERO", sito en la calle Pou núm. 61 de Calafell, ('},{text:unit,bold:true},{text:"), cuya ubicación, lindes, características, estado de conservación, elementos y servicios comunes y privativos, manifiestan las partes conocer."}],3);
+
+  heading("SEGUNDA.-");
+  addText([{text:"Las partes convienen en establecer la duración de este contrato de UN AÑO, desde el "},{text:`${startDay} de ${startMonth} de ${startYear}`,bold:true},{text:" hasta el "},{text:`${endDay} de ${endMonth} de ${endYear}`,bold:true},{text:". Finalizado el plazo, la arrendataria deberá dejar libre el trastero sin necesidad de requerimiento previo, sin perjuicio de que las partes puedan formalizar nuevo contrato o prórroga expresa."}],2);
+  addText([{text:"La parte arrendataria podrá renunciar libremente al contrato, siempre que la renuncia se comunique fehacientemente con una antelación mínima de tres meses. El incumplimiento comportará una indemnización equivalente al importe de la renta por el período entre el preaviso y los tres meses."}],3);
+
+  heading("TERCERA.-");
+  addText([{text:"Con expresa renuncia al art. 34 de la L.A.U., la extinción del contrato por el transcurso del término convenido no dará derecho a la arrendataria a indemnización alguna a cargo de la arrendadora."}],3);
+
+  heading("CUARTA.-");
+  addText([{text:"Las partes establecen una renta de alquiler de "},{text:`${rent} €`,bold:true},{text:" mensuales. La renta se abonará de forma anticipada durante los cinco primeros días de cada mensualidad en la cuenta núm. "},{text:"ES26 2100 0366 8502 0071 2257",bold:true},{text:", titular de la Sra. Joana Solé, o en la que la misma designe."}],2);
+  addText([{text:"La renta será objeto de actualización anual según el Índice General de Precios al Consumo. La primera actualización se efectuará en "},{text:signMonth,bold:true},{text:", conforme al IPC interanual al mes de diciembre. La renta no se modificará si dicho índice resultare negativo."}],2);
+  addText([{text:"Adicionalmente, la arrendataria participará en los gastos de luz y agua de la nave en la cantidad de "},{text:"2,5 €",bold:true},{text:" mensuales."}],3);
+
+  heading("QUINTA.-");
+  addText([{text:"No se establece ningún tipo de fianza."}],3);
+
+  heading("SEXTA.-");
+  addText([{text:"Si finalizado el contrato la arrendataria no deja libre el trastero, indemnizará a la arrendadora en "},{text:"10,00 € diarios",bold:true},{text:"; si el retraso fuere de dos meses o superior, la indemnización será de "},{text:"20,00 € diarios",bold:true},{text:". Al finalizar el contrato la arrendataria deberá dejar el trastero libre y vacuo a disposición de la arrendadora."}],3);
+
+  heading("SÉPTIMA.-");
+  addText([{text:"Serán a cuenta de la arrendataria todo tipo de impuestos, gravámenes y cargas fiscales y laborales necesarios para la gestión y uso del trastero que se arrienda."}],3);
+
+  heading("OCTAVA.-");
+  addText([{text:"La arrendataria se hace directa y exclusivamente responsable de los daños que puedan ocasionarse a personas o cosas en el trastero arrendado. Se compromete a contratar un Seguro que cubra los riesgos básicos, daños materiales en contenido, robo y responsabilidad civil."}],3);
+
+  heading("NOVENA.-");
+  addText([{text:"Será de cuenta y cargo de la parte arrendadora el IBI y tasa de recogida de basuras."}],3);
+
+  heading("DÉCIMA.-");
+  addText([{text:"Con expresa renuncia al art. 32 de la L.A.U., la arrendataria no podrá subarrendar ni ceder el trastero, total ni parcialmente, sin consentimiento previo y escrito de la arrendadora."}],3);
+
+  heading("DÉCIMO-PRIMERA.-");
+  addText([{text:"El trastero se arrienda en las condiciones actuales. La arrendataria no podrá efectuar obra alguna sin consentimiento expreso escrito de la arrendadora, salvo las propias del mantenimiento y reparación, cuyo coste será siempre a cargo de la arrendataria."}],3);
+
+  heading("DÉCIMO-SEGUNDA.-");
+  addText([{text:"La arrendataria se compromete a conservar y cuidar el trastero con la diligencia de un ordenado comerciante, realizando por su cuenta las obras necesarias de conservación, reparación y reposición de todos los elementos arrendados."}],3);
+
+  heading("DÉCIMO-TERCERA.-");
+  addText([{text:"La arrendataria se obliga a permitir el acceso al trastero a la arrendadora o a la persona u operarios que ésta delegue, durante la vigencia del contrato."}],3);
+
+  heading("DÉCIMO-CUARTA.-");
+  addText([{text:"El trastero no puede, bajo ningún concepto, ser destinado a vivienda propia o de terceras personas, ni a ningún otro uso que el especificado, salvo autorización expresa escrita de los propietarios."}],3);
+
+  heading("DÉCIMO-QUINTA.-");
+  addText([{text:"Queda expresamente prohibido el almacenaje de materias peligrosas o insalubres, así como realizar actividades ilegales. Ello será causa de rescisión automática del contrato."}],3);
+
+  heading("DÉCIMO-SEXTA.-");
+  addText([{text:"La arrendataria renuncia expresamente al art. 25 en relación al art. 31 de la L.A.U., renunciando a sus derechos de adquisición preferente, tanteo y retracto sobre el trastero arrendado."}],3);
+
+  heading("DÉCIMO-SÉPTIMA.-");
+  addText([{text:"La arrendataria responde conjunta y solidariamente, con renuncia al derecho de excusión, división y orden, de todos los compromisos asumidos en el presente contrato y especialmente del pago de la renta."}],3);
+
+  heading("DÉCIMO-OCTAVA.-");
+  addText([{text:"Para cualquier duda respecto a la interpretación o cumplimiento del contrato, ambas partes, con renuncia expresa al fuero de su domicilio, se someten a la jurisdicción y competencia de los Juzgados y Tribunales de "},{text:"El Vendrell",bold:true},{text:"."}],4);
+
+  addText([{text:"Y en prueba de conformidad, las partes afirmándose y ratificándose en el contenido de este contrato, lo firman por duplicado, con promesa de cumplirlo bien y fielmente, en el lugar y fecha indicados en el encabezamiento."}]);
+  space(10);
+
+  if(y>230){d.addPage();y=20;}
+  d.setFont("helvetica","bold"); d.setFontSize(10);
+  d.text("EL ARRENDADOR",lm,y);
+  d.text("LA ARRENDATARIA",115,y);
+  y+=5;
+  d.setFont("helvetica","normal"); d.setFontSize(9);
+  d.text("Fdo.: Joana Solé Santacana",lm,y);
+  d.text(`Fdo.: ${tenantName}`,115,y);
+  y+=4;
+
+  // Draw signature boxes
+  d.setDrawColor(200); d.setFillColor(250,250,250);
+  d.roundedRect(lm, y, 75, 30, 2, 2, "FD");
+  d.roundedRect(115, y, 75, 30, 2, 2, "FD");
+
+  // Embed signatures if provided
+  if(ownerSig){
+    try{ d.addImage(ownerSig,"PNG",lm+2,y+1,71,28); }catch(e){}
+  }
+  if(tenantSig){
+    try{ d.addImage(tenantSig,"PNG",115+2,y+1,71,28); }catch(e){}
+  }
+
+  const filename=`Contrato_${unit.replace(/ /g,"_")}_${tenantName.replace(/ /g,"_")}_${signYear}.pdf`;
+  d.save(filename);
+  return filename;
+}
+
 function checkIPC(tenants) {
   const now=new Date(); const alerts=[];
   tenants.forEach(ten=>{
     if(!ten.contractStart)return;
     const start=new Date(ten.contractStart);
-    if(start.getDate()===now.getDate()&&start.getMonth()===now.getMonth()){
-      const years=now.getFullYear()-start.getFullYear();
-      if(years>0)alerts.push({tenant:ten,years,type:"ipc"});
-      if(years===0)alerts.push({tenant:ten,years:0,type:"signed_today"});
-    }
+
+    // Contrato expirado (contractEnd en el pasado)
     if(ten.contractEnd){
       const end=new Date(ten.contractEnd);
       const daysLeft=Math.ceil((end-now)/(1000*60*60*24));
-      if(daysLeft>=0&&daysLeft<=30)alerts.push({tenant:ten,daysLeft,type:"expiring"});
+      if(daysLeft<0) alerts.push({tenant:ten,type:"expired"});
+      else if(daysLeft<=30) alerts.push({tenant:ten,daysLeft,type:"expiring"});
+    }
+
+    // IPC: mismo mes y año de aniversario, si tiene ipc activado
+    if(ten.ipc==="si"){
+      const years=now.getFullYear()-start.getFullYear();
+      if(years>=1 && now.getMonth()===start.getMonth()){
+        // Solo mostrar si no se ha subido ya este año
+        const lastIpcYear=ten.lastIpcYear||0;
+        if(lastIpcYear < now.getFullYear()){
+          alerts.push({tenant:ten,years,type:"ipc"});
+        }
+      }
+    }
+
+    if(start.getDate()===now.getDate()&&start.getMonth()===now.getMonth()&&start.getFullYear()===now.getFullYear()){
+      alerts.push({tenant:ten,type:"signed_today"});
     }
   });
   return alerts;
@@ -94,6 +337,10 @@ const T={
     joinedSince:"Inquilino desde",totalCosts:"Total costes",monthlyRent:"Alquiler fijo",
     incomeMonth:"Ingreso mensual",paidCount:"Pagos recibidos",activeTenants:"Inquilinos activos",
     pendingMaint:"Mantenimiento pendiente",recentIncidents:"Incidencias recientes",hello:"Hola",
+    documents:"Documentos",generateExcel:"Generar Excel anual",downloadDoc:"Descargar",noDocuments:"No hay documentos todavía",docGenerated:"Documento generado",
+    contracts:"Contratos",newContract:"Nuevo contrato",contractGenerated:"Contrato generado",noContracts:"No hay contratos",tenantCreated:"Inquilino y contrato creados",
+    tenantSignature:"Firma del inquilino",tenantConfirm:"He leído y acepto el contrato de arrendamiento",contractDetails:"Datos del contrato",
+    signDate:"Fecha de firma",startDate:"Inicio del contrato",endDate:"Fin del contrato",dni:"DNI",address:"Domicilio actual",accessPassword:"Contraseña de acceso",
     contractStart:"Inicio contrato",contractEnd:"Fin contrato",editTenant:"Editar inquilino",
     contractAnniversary:"Subida de IPC",notifications:"Notificaciones",
     noNotifications:"Sin notificaciones",contractSigned:"Contrato firmado el",
@@ -116,6 +363,10 @@ const T={
     joinedSince:"Tenant since",totalCosts:"Total costs",monthlyRent:"Fixed rent",
     incomeMonth:"Monthly income",paidCount:"Payments received",activeTenants:"Active tenants",
     pendingMaint:"Pending maintenance",recentIncidents:"Recent issues",hello:"Hello",
+    documents:"Documents",generateExcel:"Generate annual Excel",downloadDoc:"Download",noDocuments:"No documents yet",docGenerated:"Document generated",
+    contracts:"Contracts",newContract:"New contract",contractGenerated:"Contract generated",noContracts:"No contracts yet",tenantCreated:"Tenant and contract created",
+    tenantSignature:"Tenant signature",tenantConfirm:"I have read and accept the rental agreement",contractDetails:"Contract details",
+    signDate:"Signing date",startDate:"Contract start",endDate:"Contract end",dni:"ID number",address:"Current address",accessPassword:"Access password",
     contractStart:"Contract start",contractEnd:"Contract end",editTenant:"Edit tenant",
     contractAnniversary:"IPC Rent Increase",notifications:"Notifications",
     noNotifications:"No notifications",contractSigned:"Contract signed on",
@@ -138,6 +389,10 @@ const T={
     joinedSince:"مستأجر منذ",totalCosts:"إجمالي التكاليف",monthlyRent:"الإيجار الثابت",
     incomeMonth:"الدخل الشهري",paidCount:"المدفوعات المستلمة",activeTenants:"المستأجرون النشطون",
     pendingMaint:"صيانة معلقة",recentIncidents:"البلاغات الأخيرة",hello:"مرحباً",
+    documents:"المستندات",generateExcel:"إنشاء Excel سنوي",downloadDoc:"تحميل",noDocuments:"لا توجد مستندات",docGenerated:"تم إنشاء المستند",
+    contracts:"العقود",newContract:"عقد جديد",contractGenerated:"تم إنشاء العقد",noContracts:"لا توجد عقود",tenantCreated:"تم إنشاء المستأجر والعقد",
+    tenantSignature:"توقيع المستأجر",tenantConfirm:"لقد قرأت وأوافق على عقد الإيجار",contractDetails:"بيانات العقد",
+    signDate:"تاريخ التوقيع",startDate:"بداية العقد",endDate:"نهاية العقد",dni:"رقم الهوية",address:"العنوان الحالي",accessPassword:"كلمة المرور",
     contractStart:"بداية العقد",contractEnd:"نهاية العقد",editTenant:"تعديل المستأجر",
     contractAnniversary:"زيادة IPC",notifications:"الإشعارات",
     noNotifications:"لا توجد إشعارات",contractSigned:"تم توقيع العقد في",
@@ -346,6 +601,10 @@ export default function App() {
   const [tenants,setTenants]=useState([]);
   const [showNotif,setShowNotif]=useState(false);
   const [sidebarOpen,setSidebarOpen]=useState(true);
+  const [documents,setDocuments]=useState([]);
+  const [contracts,setContracts]=useState([]);
+  const [properties,setProperties]=useState([]);
+  const [currentProp,setCurrentProp]=useState(null); // {id, name, buildings:[]}
 
   const t=T[lang||"es"];
   const isOwner=profile?.role==="owner";
@@ -361,11 +620,112 @@ export default function App() {
   },[]);
 
   useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"properties",user.uid,"list"),snap=>{
+      const props=snap.docs.map(d=>({id:d.id,...d.data()}));
+      setProperties(props);
+      if(props.length===1)setCurrentProp(props[0]);
+      // First time: create default Calafell property
+      if(props.length===0){
+        addDoc(collection(db,"properties",user.uid,"list"),{
+          name:"Calafell",
+          buildings:["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"],
+          createdAt:serverTimestamp()
+        });
+      }
+    });
+  },[user,isOwner]);
+
+  useEffect(()=>{
     if(!isOwner)return;
     const q=query(collection(db,"users"),where("role","==","tenant"));
-    const unsub=onSnapshot(q,snap=>setTenants(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    const unsub=onSnapshot(q,snap=>{
+      const all=snap.docs.map(d=>({id:d.id,...d.data()}));
+      // Filter by current property if set
+      setTenants(currentProp?all.filter(t=>t.propId===currentProp.id):all);
+    });
     return unsub;
-  },[isOwner]);
+  },[isOwner,currentProp]);
+
+  useEffect(()=>{
+    if(!isOwner||!user)return;
+    const q=query(collection(db,"documents",user.uid,"files"),orderBy("createdAt","desc"));
+    const unsub=onSnapshot(q,snap=>setDocuments(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    return unsub;
+  },[isOwner,user]);
+
+  async function saveDocument(docInfo){
+    await addDoc(collection(db,"documents",user.uid,"files"),{...docInfo,createdAt:serverTimestamp()});
+  }
+
+  useEffect(()=>{
+    if(!isOwner||!user)return;
+    const q=query(collection(db,"contracts",user.uid,"files"),orderBy("createdAt","desc"));
+    const unsub=onSnapshot(q,snap=>setContracts(snap.docs.map(d=>({id:d.id,...d.data()}))));
+    return unsub;
+  },[isOwner,user]);
+
+  // INVOICES
+  const [invoices,setInvoices]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"invoices",user.uid,"files"),snap=>{
+      setInvoices(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>a.invoiceNum-b.invoiceNum));
+    });
+  },[user,isOwner]);
+  async function saveInvoice(inv){
+    await addDoc(collection(db,"invoices",user.uid,"files"),{...inv,propId:currentProp?.id||"",createdAt:serverTimestamp()});
+  }
+  async function deleteInvoice(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"invoices",user.uid,"files",id));
+    showToast("🗑️ Factura eliminada");
+  }
+
+  // RECEIPTS
+  const [receipts,setReceipts]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"receipts",user.uid,"files"),snap=>{
+      setReceipts(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));
+    });
+  },[user,isOwner]);
+  async function saveReceipt(rec){
+    await addDoc(collection(db,"receipts",user.uid,"files"),{...rec,propId:currentProp?.id||"",createdAt:serverTimestamp()});
+  }
+  async function deleteReceipt(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"receipts",user.uid,"files",id));
+    showToast("🗑️ Recibo eliminado");
+  }
+
+  // TRASTEROS
+  const [trasteros,setTrasteros]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(query(collection(db,"trasteros",user.uid,"list"),orderBy("createdAt","asc")),snap=>{
+      setTrasteros(snap.docs.map(d=>({id:d.id,...d.data()})));
+    });
+  },[user,isOwner]);
+  async function addTrastero({unit,building}){
+    await addDoc(collection(db,"trasteros",user.uid,"list"),{unit,building,createdAt:serverTimestamp()});
+    showToast("✅ Trastero añadido");
+  }
+  async function deleteTrastero(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"trasteros",user.uid,"list",id));
+    showToast("🗑️ Trastero eliminado");
+  }
+
+  async function saveContract(contractInfo){
+    await addDoc(collection(db,"contracts",user.uid,"files"),{...contractInfo,createdAt:serverTimestamp()});
+  }
+
+  async function deleteContract(contractId){
+    const {deleteDoc} = await import("firebase/firestore");
+    await deleteDoc(doc(db,"contracts",user.uid,"files",contractId));
+    showToast("🗑️ Contrato eliminado");
+  }
 
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
   const persist=async(ref,data)=>{setSaving(true);await updateDoc(ref,data);setSaving(false);};
@@ -373,6 +733,11 @@ export default function App() {
   if(user===undefined)return(<><style>{css}</style><div style={{minHeight:"100vh",background:"#1A1612",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:"#8C7B6E",fontFamily:"'DM Sans',sans-serif"}}>Cargando...</p></div></>);
   if(!lang&&!user)return(<><style>{css}</style><LangSelect onSelect={setLang}/></>);
   if(!user)return(<><style>{css}</style><LoginScreen t={t} onLogin={(u,p)=>{setUser(u);setProfile(p);setPage(p.role==="owner"?"dashboard":"t-home");}}/></>);
+  if(isOwner&&!currentProp)return(<><style>{css}</style><PropertySelector user={user} properties={properties} onSelect={setCurrentProp} onCreateProp={async(name,buildings)=>{
+    const ref=await addDoc(collection(db,"properties",user.uid,"list"),{name,buildings,createdAt:serverTimestamp()});
+    // Migrate existing tenants to this prop if it's the first one
+    showToast("✅ Propiedad '"+name+"' creada");
+  }}/></>);
 
   const ownerNav=[
     {id:"dashboard",icon:"📊",label:t.dashboard},
@@ -381,6 +746,11 @@ export default function App() {
     {id:"maintenance",icon:"🔧",label:t.maintenance},
     {id:"calendar",icon:"📅",label:t.calendar},
     {id:"messages",icon:"💬",label:t.messages},
+    {id:"documentos",icon:"📁",label:t.documents},
+    {id:"contratos",icon:"📝",label:t.contracts},
+    {id:"facturas",icon:"🧾",label:"Facturas"},
+    {id:"recibos",icon:"🖨️",label:"Recibos"},
+    {id:"trasteros",icon:"🏚️",label:"Trasteros"},
   ];
   const tenantNav=[
     {id:"t-home",icon:"🏠",label:t.myHome},
@@ -393,10 +763,49 @@ export default function App() {
   async function togglePayment(tenantId,month){
     const t2=tenants.find(x=>x.id===tenantId);if(!t2)return;
     const payments={...(t2.payments||{})};const cur=payments[month]||{paid:false};
-    payments[month]={paid:!cur.paid,date:!cur.paid?today():null};
+    const nowPaying=!cur.paid;
+    payments[month]={paid:nowPaying,date:nowPaying?today():null};
     await persist(doc(db,"users",tenantId),{payments});
-    if(payments[month].paid)generateReceipt({tenantName:t2.name,unit:t2.unit,month,date:today()});
-    showToast(payments[month].paid?"✅ Pago registrado · PDF descargado":"❌ Pago revertido");
+
+    if(nowPaying){
+      const now=new Date();
+      const year=now.getFullYear();
+      const dateStr=today();
+      const concept=`Alquiler ${t2.unit||""} ${month}`;
+
+      // Generate FACTURA if docType is factura or ambos
+      if(t2.docType==="factura"||t2.docType==="ambos"){
+        const allInvNums=invoices.filter(i=>i.year===year).map(i=>i.invoiceNum);
+        const nextNum=allInvNums.length>0?Math.max(...allInvNums)+1:7;
+        const base=parseFloat(t2.docType==="ambos"?t2.rentFactura:t2.rent)||0;
+        const inv={
+          invoiceNum:nextNum, year, date:dateStr, concept,
+          base, tenantId, tenantName:t2.name,
+          clientName:t2.name, clientNif:t2.dni||"",
+          clientAddress:t2.address||"", clientEmail:t2.email||""
+        };
+        await saveInvoice(inv);
+        generateInvoicePDF(inv);
+      }
+
+      // Generate RECIBO if docType is recibo or ambos
+      if(t2.docType==="recibo"||t2.docType==="ambos"||!t2.docType){
+        const allRecNums=receipts.filter(r=>r.year===year).map(r=>r.receiptNum);
+        const nextNum=allRecNums.length>0?Math.max(...allRecNums)+1:1;
+        const amount=parseFloat(t2.docType==="ambos"?t2.rentRecibo:t2.rent)||0;
+        const rec={
+          receiptNum:nextNum, year, date:dateStr, concept,
+          amount, tenantId, tenantName:t2.name,
+          clientName:t2.name, clientDni:t2.dni||""
+        };
+        await saveReceipt(rec);
+        generateReceiptPDF(rec);
+      }
+
+      showToast("✅ Pago registrado · Documento generado y guardado");
+    }else{
+      showToast("❌ Pago revertido");
+    }
   }
 
   async function changeStatus(tenantId,maintId,status){
@@ -413,6 +822,19 @@ export default function App() {
     showToast("✅ Incidencia enviada");
   }
 
+  async function updateTenantField(tenantId,field,value){
+    await persist(doc(db,"users",tenantId),{[field]:value});
+    showToast("✅ Actualizado");
+  }
+
+  async function deleteTenant(tenantId){
+    if(!window.confirm("¿Eliminar este inquilino? Se borrarán todos sus datos."))return;
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"users",tenantId));
+    setModal(null);
+    showToast("🗑️ Inquilino eliminado");
+  }
+
   async function addCost(tenantId,cost){
     const ten=tenants.find(x=>x.id===tenantId);
     const costs=[...(ten.costs||[]),{id:Date.now(),...cost}];
@@ -420,16 +842,29 @@ export default function App() {
     setModal(null);showToast("✅ Coste añadido");
   }
 
-  async function createTenant({name,unit,phone,rent,email,password,contractStart,contractEnd}){
+  async function deleteCost(tenantId,costId){
+    const ten=tenants.find(x=>x.id===tenantId);
+    const costs=(ten.costs||[]).filter(c=>c.id!==costId);
+    await persist(doc(db,"users",tenantId),{costs});
+    showToast("🗑️ Coste eliminado");
+  }
+
+  async function createTenant({name,unit,phone,rent,email,contractStart,contractEnd,docType,building,payFreq,fianza,fianzaAmount,notes,rentRecibo,rentFactura,ipc}){
     try{
-      const cred=await createUserWithEmailAndPassword(auth,email,password);
-      await setDoc(doc(db,"users",cred.user.uid),{
-        name,unit,phone,rent:parseFloat(rent),email,role:"tenant",joined:today(),
-        contractStart:contractStart||"",contractEnd:contractEnd||"",
+      const tenantRef=doc(collection(db,"users"));
+      await setDoc(tenantRef,{
+        name,unit,phone:phone||"",rent:parseFloat(rent),email:email||"",role:"tenant",
+        joined:today(),contractStart:contractStart||"",contractEnd:contractEnd||"",
+        docType:docType||"recibo",building:building||"",propId:currentProp?.id||"",
+        payFreq:payFreq||"mensual",
+        rentRecibo:docType==="ambos"?parseFloat(rentRecibo)||0:0,
+        rentFactura:docType==="ambos"?parseFloat(rentFactura)||0:0,
+        fianza:fianza||"no",fianzaAmount:fianza==="si"?parseFloat(fianzaAmount)||0:0,
+        notes:notes||"",ipc:ipc||"no",lastIpcYear:0,
         payments:{},costs:[],maintenance:[],lang:"es"
       });
-      await signInWithEmailAndPassword(auth,OWNER_EMAIL,window._ownerPass||"");
-      setModal(null);showToast("✅ Inquilino creado");
+      showToast("✅ Inquilino creado");
+      return tenantRef.id;
     }catch(e){showToast("❌ Error: "+e.message);}
   }
 
@@ -441,11 +876,16 @@ export default function App() {
   const renderPage=()=>{
     if(isOwner){
       if(page==="dashboard")return<Dashboard t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})}/>;
-      if(page==="tenants")return<Tenants t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
-      if(page==="finances")return<Finances t={t} tenants={tenants} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})}/>;
+      if(page==="tenants")return<Tenants t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
+      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onDeleteCost={deleteCost}/>;
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
+      if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
+      if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
+      if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
+      if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
+      if(page==="trasteros")return<TrasterosPage t={t} tenants={tenants} buildings={currentProp?.buildings||[]} trasteros={trasteros} onAddTrastero={addTrastero} onDeleteTrastero={deleteTrastero} onCreateTenant={async(data)=>{const id=await createTenant(data);if(id&&data._contractData){await saveContract({...data._contractData,year:data._contractData.signYear||new Date().getFullYear(),date:today(),tenantUid:id});generateContractDocx(data._contractData);}}}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -456,10 +896,103 @@ export default function App() {
 
   const renderModal=()=>{
     if(!modal)return null;
-    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})}/>;}
-    if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant}/>;
-    if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant}/>;}
+    if(modal.type==="profile"){const ten=tenants.find(x=>x.id===modal.id);return<TenantProfileModal t={t} tenant={ten} onToggle={togglePayment} onAddCost={addCost} onDeleteCost={deleteCost} onClose={()=>setModal(null)} onEdit={()=>setModal({type:"edit-tenant",id:modal.id})} contracts={contracts} onUploadContract={()=>setModal({type:"upload-contract-tenant",id:modal.id})} onDelete={()=>deleteTenant(modal.id)} onUpdateField={updateTenantField}/>;}
+    if(modal.type==="new-tenant")return<NewTenantModal t={t} onClose={()=>setModal(null)} onSave={createTenant} buildings={currentProp?.buildings||[]} onAddContract={(id,ten)=>setModal({type:"upload-contract-tenant",id,prefillData:ten})}/>;
+    if(modal.type==="edit-tenant"){const ten=tenants.find(x=>x.id===modal.id);return<EditTenantModal t={t} tenant={ten} onClose={()=>setModal(null)} onSave={editTenant} propBuildings={currentProp?.buildings||[]}/>;}
     if(modal.type==="add-cost")return<AddCostModal t={t} tenants={tenants} onSave={addCost} onClose={()=>setModal(null)}/>;
+    if(modal.type==="new-invoice"){
+      const ten=tenants.find(x=>x.id===modal.tenantId);
+      return<NewInvoiceModal t={t} tenant={ten} invoices={invoices} onClose={()=>setModal(null)} onSave={async(inv)=>{
+        await saveInvoice(inv);
+        showToast("✅ Factura guardada");
+      }}/>;
+    }
+    if(modal.type==="new-receipt"){
+      const ten=tenants.find(x=>x.id===modal.tenantId);
+      return<NewReceiptModal t={t} tenant={ten} receipts={receipts} onClose={()=>setModal(null)} onSave={async(rec)=>{
+        await saveReceipt(rec);
+        showToast("✅ Recibo guardado");
+      }}/>;
+    }
+    if(modal.type==="upload-contract-tenant"){
+      const ten=modal.prefillData||tenants.find(x=>x.id===modal.id);
+      return<UploadContractModal t={t} onClose={()=>setModal(null)} prefill={ten} onSave={async(data)=>{
+        await saveContract({...data,year:data.signYear||new Date().getFullYear(),date:today(),tenantUid:modal.id});
+        showToast("✅ Contrato guardado");
+      }}/>;
+    }
+    if(modal.type==="upload-contract")return<UploadContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
+      const tenantRef=doc(collection(db,"users"));
+      await setDoc(tenantRef,{
+        name:data.tenantName,unit:data.unit,phone:data.phone||"",
+        rent:parseFloat(data.rent)||0,email:data.email||"",role:"tenant",
+        joined:today(),contractStart:data.contractStartISO||"",
+        contractEnd:data.contractEndISO||"",
+        payments:{},costs:[],maintenance:[],lang:"es"
+      });
+      await saveContract({...data,year:data.signYear||new Date().getFullYear(),date:today(),tenantUid:tenantRef.id});
+      showToast("✅ Inquilino y contrato guardados");
+    }}/>;
+    if(modal.type==="new-contract")return<NewContractModal t={t} onClose={()=>setModal(null)} onSave={async(data)=>{
+      const year=data.signYear;
+      try{
+        // Guardar inquilino directamente en Firestore (sin crear cuenta de acceso)
+        const tenantRef=doc(collection(db,"users"));
+        await setDoc(tenantRef,{
+          name:data.tenantName, unit:data.unit, phone:data.phone||"",
+          rent:parseFloat(data.rent), email:data.email||"", role:"tenant",
+          joined:today(), contractStart:data.contractStartISO||"",
+          contractEnd:data.contractEndISO||"",
+          payments:{}, costs:[], maintenance:[], lang:"es"
+        });
+        // Guardar contrato
+        await saveContract({...data, year, date:today(), tenantUid:tenantRef.id});
+        showToast("✅ Inquilino y contrato guardados");
+      }catch(e){
+        showToast("⚠️ Error: "+e.message);
+      }
+    }}/>;
+    if(modal.type==="renovar"){
+      const ten=modal.tenant;
+      const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+      const now=new Date();
+      const newStart=ten.contractEnd||today();
+      const endDate=new Date(newStart); endDate.setFullYear(endDate.getFullYear()+1);
+      const newEnd=endDate.toISOString().split("T")[0];
+      return(
+        <div className="overlay" onClick={()=>setModal(null)}>
+          <div className="modal" style={{maxWidth:420}} onClick={e=>e.stopPropagation()}>
+            <div className="modal-hd">
+              <h3>🔄 Renovar contrato</h3>
+              <button className="close-btn" onClick={()=>setModal(null)}>✕</button>
+            </div>
+            <div style={{background:"var(--cream)",borderRadius:10,padding:14,marginBottom:16,fontSize:13}}>
+              <div style={{fontWeight:700,marginBottom:8}}>{ten.name} · {ten.unit}</div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nuevo inicio</span><strong>{newStart}</strong></div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nuevo fin</span><strong>{newEnd}</strong></div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{ten.rent} €/mes</strong></div>
+            </div>
+            <p style={{fontSize:12,color:"var(--warm)",marginBottom:16}}>Se renovará por 1 año a partir de la fecha de vencimiento actual.</p>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-o" style={{flex:1}} onClick={async()=>{
+                if(!window.confirm(`¿Eliminar a ${ten.name} y liberar el trastero?`))return;
+                const {deleteDoc}=await import("firebase/firestore");
+                await deleteDoc(doc(db,"users",ten.id));
+                setModal(null);
+                showToast("🗑️ Inquilino eliminado · Trastero libre");
+              }}>🗑️ Eliminar inquilino</button>
+              <button className="btn btn-p" style={{flex:1}} onClick={async()=>{
+                await persist(doc(db,"users",ten.id),{
+                  contractStart:newStart, contractEnd:newEnd, lastIpcYear:0
+                });
+                setModal(null);
+                showToast("✅ Contrato renovado hasta "+newEnd);
+              }}>🔄 Renovar 1 año</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return null;
   };
 
@@ -474,6 +1007,12 @@ export default function App() {
             <button onClick={()=>setSidebarOpen(v=>!v)} style={{background:"none",border:"none",color:"var(--warm)",cursor:"pointer",fontSize:18,padding:"4px 6px",marginLeft:"auto"}}>{sidebarOpen?"◀":"▶"}</button>
           </div>
           {sidebarOpen&&<div className="s-role">{isOwner?t.owner:t.tenant}</div>}
+          {sidebarOpen&&isOwner&&currentProp&&(
+            <div style={{margin:"0 10px 6px",background:"#2A2420",borderRadius:8,padding:"6px 10px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{fontSize:12,color:"var(--cream)",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🏢 {currentProp.name}</div>
+              <button style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:14,padding:"0 0 0 6px",flexShrink:0}} onClick={()=>setCurrentProp(null)} title="Cambiar propiedad">⇄</button>
+            </div>
+          )}
           <nav className="s-nav">
             {nav.map(item=>(
               <button key={item.id} className={activeClass(item.id)} onClick={()=>setPage(item.id)} title={item.label}>
@@ -515,19 +1054,50 @@ export default function App() {
           {!sidebarOpen&&<button className="hamburger-btn" onClick={e=>{e.stopPropagation();setSidebarOpen(true);}}>☰</button>}
           {saving&&<div className="saving">{t.saving}</div>}
           {isOwner&&anniversaries.length>0&&page==="dashboard"&&anniversaries.map((a,i)=>(
-            <div key={i} className="alert-banner">
-              <div className="al-icon">{a.type==="expiring"?"⚠️":"🎂"}</div>
-              <div>
-                <div className="al-title">
-                  {a.type==="ipc"&&`${t.contractAnniversary} · ${a.tenant.name}`}
-                  {a.type==="signed_today"&&`📝 ${a.tenant.name}`}
-                  {a.type==="expiring"&&`${t.contractExpires} · ${a.tenant.name}`}
+            <div key={i} className="alert-banner" style={{alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:12,flex:1}}>
+                <div className="al-icon">
+                  {a.type==="expired"?"🔴":a.type==="expiring"?"⚠️":a.type==="ipc"?"📈":"📝"}
                 </div>
-                <div className="al-sub">
-                  {a.type==="ipc"&&`Lleva ${a.years} año/s · Revisa el IPC · Contrato desde ${a.tenant.contractStart}`}
-                  {a.type==="signed_today"&&`${t.contractSigned} ${a.tenant.contractStart}`}
-                  {a.type==="expiring"&&`${a.tenant.contractEnd} · ${a.daysLeft} días restantes`}
+                <div>
+                  <div className="al-title">
+                    {a.type==="ipc"&&`Subida IPC pendiente · ${a.tenant.name}`}
+                    {a.type==="signed_today"&&`Contrato firmado hoy · ${a.tenant.name}`}
+                    {a.type==="expiring"&&`Contrato próximo a vencer · ${a.tenant.name}`}
+                    {a.type==="expired"&&`Contrato expirado · ${a.tenant.name}`}
+                  </div>
+                  <div className="al-sub">
+                    {a.type==="ipc"&&`${a.years} año/s desde la firma · Subida del 1,5% sobre ${a.tenant.rent}€ → ${(parseFloat(a.tenant.rent)*1.015).toFixed(2)}€`}
+                    {a.type==="signed_today"&&`Firmado hoy ${a.tenant.contractStart}`}
+                    {a.type==="expiring"&&`Vence el ${a.tenant.contractEnd} · Quedan ${a.daysLeft} días`}
+                    {a.type==="expired"&&`Venció el ${a.tenant.contractEnd} · ${a.tenant.unit}`}
+                  </div>
                 </div>
+              </div>
+              <div style={{display:"flex",gap:8,flexShrink:0}}>
+                {a.type==="ipc"&&<>
+                  <button className="btn btn-s btn-sm" onClick={async()=>{
+                    const newRent=parseFloat((parseFloat(a.tenant.rent)*1.015).toFixed(2));
+                    await persist(doc(db,"users",a.tenant.id),{rent:newRent,lastIpcYear:new Date().getFullYear()});
+                    showToast(`✅ Renta actualizada a ${newRent}€`);
+                  }}>✅ Subir 1,5%</button>
+                  <button className="btn btn-o btn-sm" onClick={async()=>{
+                    await persist(doc(db,"users",a.tenant.id),{lastIpcYear:new Date().getFullYear()});
+                    showToast("⏭️ IPC pospuesto hasta el año que viene");
+                  }}>❌ No subir</button>
+                </>}
+                {a.type==="expiring"&&<>
+                  <button className="btn btn-s btn-sm" onClick={()=>setModal({type:"renovar",tenant:a.tenant})}>🔄 Renovar</button>
+                </>}
+                {a.type==="expired"&&<>
+                  <button className="btn btn-s btn-sm" onClick={()=>setModal({type:"renovar",tenant:a.tenant})}>🔄 Renovar</button>
+                  <button className="btn btn-sm" style={{background:"#D94F3D",color:"white"}} onClick={async()=>{
+                    if(!window.confirm(`¿Eliminar a ${a.tenant.name} y liberar el trastero?`))return;
+                    const {deleteDoc}=await import("firebase/firestore");
+                    await deleteDoc(doc(db,"users",a.tenant.id));
+                    showToast("🗑️ Inquilino eliminado · Trastero libre");
+                  }}>🗑️ Eliminar</button>
+                </>}
               </div>
             </div>
           ))}
@@ -537,6 +1107,83 @@ export default function App() {
       {modal&&<div className="overlay" onClick={e=>e.target===e.currentTarget&&setModal(null)}>{renderModal()}</div>}
       {toast&&<div className="toast">{toast}</div>}
     </>
+  );
+}
+
+function PropertySelector({user,properties,onSelect,onCreateProp}){
+  const [creating,setCreating]=useState(false);
+  const [name,setName]=useState("");
+  const [buildings,setBuildings]=useState([""]);
+
+  const handleCreate=async()=>{
+    if(!name.trim())return;
+    const cleanBuildings=buildings.filter(b=>b.trim());
+    await onCreateProp(name.trim(),cleanBuildings);
+    setCreating(false);setName("");setBuildings([""]);
+  };
+
+  const addBuilding=()=>setBuildings(b=>[...b,""]);
+  const setBuilding=(i,v)=>setBuildings(b=>b.map((x,j)=>j===i?v:x));
+  const removeBuilding=(i)=>setBuildings(b=>b.filter((_,j)=>j!==i));
+
+  const colors=["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"];
+
+  return(
+    <div style={{minHeight:"100vh",background:"#1A1612",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:36,color:"#F5EFE8",marginBottom:6}}>Mi<span style={{color:"#C4622D",fontStyle:"italic"}}>Alquiler</span></div>
+      <div style={{color:"#8C7B6E",fontSize:14,marginBottom:32}}>Selecciona una propiedad para continuar</div>
+
+      <div style={{width:"100%",maxWidth:500}}>
+        {properties.length>0&&(
+          <>
+            <div style={{color:"#8C7B6E",fontSize:12,textTransform:"uppercase",letterSpacing:".7px",marginBottom:12}}>Tus propiedades</div>
+            {properties.map((p,i)=>(
+              <div key={p.id} onClick={()=>onSelect(p)} style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:"16px 20px",marginBottom:10,cursor:"pointer",display:"flex",alignItems:"center",gap:14,transition:"all .2s"}}
+                onMouseEnter={e=>e.currentTarget.style.border="1px solid #C4622D"}
+                onMouseLeave={e=>e.currentTarget.style.border="1px solid #3A2E28"}>
+                <div style={{width:44,height:44,borderRadius:12,background:colors[i%colors.length],display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>🏢</div>
+                <div style={{flex:1}}>
+                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8"}}>{p.name}</div>
+                  {p.buildings?.length>0&&<div style={{fontSize:12,color:"#8C7B6E",marginTop:2}}>{p.buildings.join(" · ")}</div>}
+                </div>
+                <div style={{color:"#C4622D",fontSize:20}}>›</div>
+              </div>
+            ))}
+            <div style={{height:16}}/>
+          </>
+        )}
+
+        {!creating?(
+          <button onClick={()=>setCreating(true)} style={{width:"100%",background:"none",border:"2px dashed #3A2E28",borderRadius:14,padding:"16px",color:"#8C7B6E",cursor:"pointer",fontSize:14,fontFamily:"'DM Sans',sans-serif",transition:"all .2s"}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor="#C4622D";e.currentTarget.style.color="#F5EFE8";}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor="#3A2E28";e.currentTarget.style.color="#8C7B6E";}}>
+            ➕ Añadir nueva propiedad
+          </button>
+        ):(
+          <div style={{background:"#261F1B",border:"1px solid #3A2E28",borderRadius:14,padding:20}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#F5EFE8",marginBottom:16}}>Nueva propiedad</div>
+            <div style={{marginBottom:12}}>
+              <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Nombre de la propiedad</label>
+              <input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: Calafell, Barcelona, Oficinas..." style={{width:"100%",background:"#1A1612",border:"1px solid #3A2E28",borderRadius:8,padding:"10px 12px",color:"#F5EFE8",fontFamily:"'DM Sans',sans-serif",fontSize:14,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{color:"#8C7B6E",fontSize:12,display:"block",marginBottom:4}}>Naves / Edificios (opcional)</label>
+              {buildings.map((b,i)=>(
+                <div key={i} style={{display:"flex",gap:6,marginBottom:6}}>
+                  <input value={b} onChange={e=>setBuilding(i,e.target.value)} placeholder={`Nave ${i+1}`} style={{flex:1,background:"#1A1612",border:"1px solid #3A2E28",borderRadius:8,padding:"8px 12px",color:"#F5EFE8",fontFamily:"'DM Sans',sans-serif",fontSize:13}}/>
+                  {buildings.length>1&&<button onClick={()=>removeBuilding(i)} style={{background:"none",border:"none",color:"#8C7B6E",cursor:"pointer",fontSize:18}}>✕</button>}
+                </div>
+              ))}
+              <button onClick={addBuilding} style={{background:"none",border:"none",color:"#C4622D",cursor:"pointer",fontSize:13,padding:0}}>+ Añadir nave</button>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:16}}>
+              <button onClick={()=>setCreating(false)} style={{flex:1,background:"none",border:"1px solid #3A2E28",borderRadius:10,padding:"10px",color:"#8C7B6E",cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>Cancelar</button>
+              <button onClick={handleCreate} disabled={!name.trim()} style={{flex:2,background:"#C4622D",border:"none",borderRadius:10,padding:"10px",color:"white",cursor:"pointer",fontWeight:600,fontFamily:"'DM Sans',sans-serif",opacity:name.trim()?1:.5}}>Crear propiedad</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -622,93 +1269,537 @@ function Dashboard({t,tenants,onSelect}){
   );
 }
 
-function Tenants({t,tenants,onSelect,onNew,onEdit}){
+function Tenants({t,tenants,onSelect,onNew,onEdit,buildings=[]}){
+  buildings=buildings.filter(b=>b);
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const groups={};
+  buildings.forEach(b=>groups[b]=[]);
+  groups["Sin nave asignada"]=[];
+  tenants.forEach(ten=>{
+    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave asignada";
+    groups[b].push(ten);
+  });
+  const allGroups=[...buildings,"Sin nave asignada"].filter(b=>groups[b].length>0);
+  const [openBuilding,setOpenBuilding]=useState(allGroups[0]||null);
+  const [verTodo,setVerTodo]=useState(false);
+
+  const TenantRow=({ten})=>(
+    <div className="t-row">
+      <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
+      <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
+        <strong>{ten.name}</strong>
+        <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
+      </div>
+      <div style={{textAlign:"right",marginRight:8}}>
+        <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
+      </div>
+      <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
+      <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
+    </div>
+  );
+
   return(
     <div>
       <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div><h2>{t.tenants}</h2><p>{tenants.length} {t.activeTenants.toLowerCase()}</p></div>
-        <button className="btn btn-p" onClick={onNew}>➕ {t.newTenant}</button>
+        <div style={{display:"flex",gap:8}}>
+          <button className={`btn btn-sm ${verTodo?"btn-p":"btn-o"}`} onClick={()=>setVerTodo(v=>!v)}>
+            {verTodo?"🏢 Por naves":"🌐 Ver todo"}
+          </button>
+          <button className="btn btn-p" onClick={onNew}>➕ {t.newTenant}</button>
+        </div>
       </div>
-      {tenants.length===0?<div className="card"><p style={{color:"var(--warm)",fontSize:14,textAlign:"center",padding:20}}>{t.noTenants}</p></div>:
-        tenants.map(ten=>(
-          <div key={ten.id} className="t-row">
-            <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
-            <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
-              <strong>{ten.name}</strong>
-              <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
+
+      {tenants.length===0
+        ?<div className="card"><p style={{color:"var(--warm)",fontSize:14,textAlign:"center",padding:20}}>{t.noTenants}</p></div>
+        :verTodo
+          ?<div style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+            <div style={{background:"var(--terra)",color:"white",padding:"12px 16px"}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🌐 Todos los inquilinos</div>
+              <div style={{fontSize:12,opacity:.85,marginTop:2}}>{tenants.length} inquilinos · {tenants.reduce((s,ten)=>s+(ten.rent||0),0)}€/mes</div>
             </div>
-            <div style={{textAlign:"right",marginRight:8}}>
-              <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
+            <div style={{padding:"0 4px",background:"white"}}>
+              {tenants.map(ten=>(
+                <div key={ten.id} className="t-row">
+                  <div className="av av-md" style={{background:getColor(ten.name)}} onClick={()=>onSelect(ten.id)}>{initials(ten.name)}</div>
+                  <div className="t-info" style={{flex:1}} onClick={()=>onSelect(ten.id)}>
+                    <strong>{ten.name}</strong>
+                    <span style={{fontSize:10,color:getBuildingColor(ten.building||""),fontWeight:600}}>{ten.building||"Sin nave"}</span>
+                    <span>{ten.unit} · {ten.contractStart||"—"} → {ten.contractEnd||"—"}</span>
+                  </div>
+                  <div style={{textAlign:"right",marginRight:8}}>
+                    <div style={{fontWeight:600,fontSize:16}}>{ten.rent}€<span style={{fontSize:12,fontWeight:400,color:"var(--warm)"}}>/mes</span></div>
+                  </div>
+                  <span className="badge" style={{background:ten.docType==="factura"?"#EEF2FF":"#E6F4ED",color:ten.docType==="factura"?"#4F46E5":"#4A9B6F",fontSize:10}}>{ten.docType==="factura"?"🧾 Factura":"🧾 Recibo"}</span>
+                  <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
+                </div>
+              ))}
             </div>
-            <button className="btn btn-o btn-sm" onClick={()=>onEdit(ten.id)}>✏️</button>
           </div>
-        ))}
+          :allGroups.map(building=>{
+            const isOpen=openBuilding===building;
+            const totalRent=groups[building].reduce((s,ten)=>s+(ten.rent||0),0);
+            return(
+              <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <div style={{background:getBuildingColor(building),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:building)}>
+                  <div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {building}</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{groups[building].length} inquilino{groups[building].length!==1?"s":""} · {totalRent}€/mes</div>
+                  </div>
+                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
+                </div>
+                {isOpen&&(
+                  <div style={{padding:"0 4px",background:"white"}}>
+                    {groups[building].map(ten=><TenantRow key={ten.id} ten={ten}/>)}
+                  </div>
+                )}
+              </div>
+            );
+          })
+      }
     </div>
   );
 }
 
-function Finances({t,tenants,onToggle,onAddCost}){
-  const months=["Enero 2025","Febrero 2025","Marzo 2025"];
+function Finances(props){
+  const {t,tenants,onToggle,onAddCost,onDeleteCost}=props;
+  const now=new Date();
+  const startYear=2024; const endYear=startYear+15;
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const allMonths=[];
+  for(let y=startYear;y<endYear;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
 
-  // Build chart data per month
-  const chartData=months.map(m=>{
+  const [selYear,setSelYear]=useState(now.getFullYear());
+  const [tab,setTab]=useState("pagos"); // pagos | gastos | graficos
+  const [openBuilding,setOpenBuilding]=useState(null);
+  const [verTodo,setVerTodo]=useState(false);
+  const years=Array.from({length:15},(_,i)=>startYear+i);
+  const monthsOfYear=monthNames.map(m=>`${m} ${selYear}`);
+  const buildings=(props.buildings||[]).filter(b=>b);
+  const getTenantsByBuilding=(b)=>tenants.filter(t=>t.building===b);
+  const getBuildingColor=(_,i)=>["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"][i%7];
+
+  // Chart data for selected year
+  const chartData=monthsOfYear.map(m=>{
     const ingresos=tenants.filter(ten=>(ten.payments||{})[m]?.paid).reduce((s,ten)=>s+(ten.rent||0),0);
-    const gastos=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m).reduce((ss,c)=>ss+(c.amount||0),0),0);
-    const profit=ingresos-gastos;
-    return{name:m.split(" ")[0],Ingresos:ingresos,Gastos:gastos,Profit:profit};
+    const gastos=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const inversion=tenants.reduce((s,ten)=>s+(ten.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
+    const profit=ingresos-gastos-inversion;
+    return{name:m.split(" ")[0].slice(0,3),Ingresos:ingresos,Gastos:gastos,Inversión:inversion,Profit:profit};
   });
+
+  // Yearly totals
+  const totalIngresos=chartData.reduce((s,d)=>s+d.Ingresos,0);
+  const totalGastos=chartData.reduce((s,d)=>s+d.Gastos,0);
+  const totalInversion=chartData.reduce((s,d)=>s+d.Inversión,0);
+  const totalProfit=totalIngresos-totalGastos-totalInversion;
 
   return(
     <div>
-      <div className="page-hd"><h2>{t.finances}</h2></div>
-      <div className="card">
-        <div className="card-title">📊 Resumen financiero</div>
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={chartData} margin={{top:8,right:16,left:0,bottom:0}}>
-            <XAxis dataKey="name" tick={{fontSize:12}}/>
-            <YAxis tick={{fontSize:12}} unit="€"/>
-            <Tooltip formatter={v=>v+"€"}/>
-            <Legend/>
-            <Bar dataKey="Ingresos" fill="#7A9E7E" radius={[6,6,0,0]}/>
-            <Bar dataKey="Gastos" fill="#D94F3D" radius={[6,6,0,0]}/>
-            <Bar dataKey="Profit" fill="#C4622D" radius={[6,6,0,0]}/>
-          </BarChart>
-        </ResponsiveContainer>
-        <div style={{display:"flex",gap:16,marginTop:16,flexWrap:"wrap"}}>
-          {chartData.map(d=>(
-            <div key={d.name} style={{flex:1,minWidth:100,background:"var(--cream)",borderRadius:12,padding:"12px 16px"}}>
-              <div style={{fontSize:12,color:"var(--warm)",marginBottom:4}}>{d.name}</div>
-              <div style={{fontSize:13}}>🟢 {d.Ingresos}€ · 🔴 {d.Gastos}€ · <strong>{d.Profit>=0?"✅":"⚠️"} {d.Profit}€</strong></div>
-            </div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
+        <h2>{t.finances}</h2>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <select className="status-sel" style={{padding:"8px 12px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
+            {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {["pagos","gastos","graficos","extracto"].map(tb=>(
+            <button key={tb} className={`chat-tab${tab===tb?" active":""}`} onClick={()=>setTab(tb)}>
+              {tb==="pagos"?"💶 Pagos":tb==="gastos"?"⚡ Gastos":tb==="graficos"?"📊 Gráficos":"🏦 Extracto"}
+            </button>
           ))}
         </div>
+        {(tab==="pagos"||tab==="gastos")&&(
+          <button className={`btn btn-sm ${verTodo?"btn-p":"btn-o"}`} onClick={()=>setVerTodo(v=>!v)}>
+            {verTodo?"🏢 Por naves":"🌐 Ver todo"}
+          </button>
+        )}
       </div>
-      <div className="card">
-        <div className="card-title">💶 {t.paymentHistory}</div>
-        <div className="tbl-wrap">
-          <table>
-            <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{months.map(m=><th key={m}>{m}</th>)}</tr></thead>
-            <tbody>
-              {tenants.map(ten=>(
-                <tr key={ten.id}>
-                  <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
-                  {months.map(m=>{const p=(ten.payments||{})[m];return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?`✓ ${p.date}`:"✗ Pend."}</span></td>);})}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+
+      {/* RESUMEN ANUAL */}
+      <div className="stats" style={{marginBottom:20}}>
+        <div className="stat sl"><div className="lbl">Ingresos {selYear}</div><div className="val">{totalIngresos}€</div></div>
+        <div className="stat rl"><div className="lbl">Gastos {selYear}</div><div className="val">{totalGastos}€</div></div>
+        <div className="stat gl"><div className="lbl">Inversión {selYear}</div><div className="val">{totalInversion}€</div></div>
+        <div className="stat tl"><div className="lbl">Profit {selYear}</div><div className="val" style={{color:totalProfit>=0?"var(--green)":"var(--red)"}}>{totalProfit}€</div></div>
+      </div>
+
+      {/* TAB PAGOS */}
+      {tab==="pagos"&&verTodo&&(
+        <div className="card">
+          <div className="card-title">💶 {t.paymentHistory} · {selYear} — Todas las naves</div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
+              <tbody>
+                {tenants.map(ten=>(
+                  <tr key={ten.id}>
+                    <td><strong>{ten.name}</strong></td>
+                    <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
+                    <td>{ten.unit}</td><td>{ten.rent}€</td>
+                    {monthsOfYear.map(m=>{
+                      const p=(ten.payments||{})[m];
+                      return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
-      <div className="card">
-        <div className="card-title">⚡ {t.costBreakdown}</div>
-        <div className="tbl-wrap">
-          <table>
-            <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>{t.month}</th><th>{t.amount}</th></tr></thead>
-            <tbody>{tenants.flatMap(ten=>(ten.costs||[]).map(c=>(<tr key={c.id}><td>{ten.name}</td><td>{c.icon} {c.name}</td><td>{c.month}</td><td>{c.amount}€</td></tr>)))}</tbody>
-          </table>
+      )}
+      {tab==="pagos"&&!verTodo&&(
+        <div>
+          {buildings.map(b=>{
+            const bTenants=getTenantsByBuilding(b);
+            if(bTenants.length===0)return null;
+            const isOpen=openBuilding===b;
+            const totalRent=bTenants.reduce((s,t)=>s+(t.rent||0),0);
+            const paidThisMonth=bTenants.filter(t=>{const m=monthsOfYear[now.getMonth()];return(t.payments||{})[m]?.paid;}).length;
+            return(
+              <div key={b} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:b)}>
+                  <div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bTenants.length} inquilinos · {totalRent}€/mes · {paidThisMonth}/{bTenants.length} pagados</div>
+                  </div>
+                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
+                </div>
+                {isOpen&&(
+                  <div style={{padding:8,background:"white"}}>
+                    <div className="tbl-wrap">
+                      <table>
+                        <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
+                        <tbody>
+                          {bTenants.map(ten=>(
+                            <tr key={ten.id}>
+                              <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
+                              {monthsOfYear.map(m=>{
+                                const p=(ten.payments||{})[m];
+                                return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
-        <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+      )}
+
+      {/* TAB GASTOS */}
+      {tab==="gastos"&&verTodo&&(
+        <div className="card">
+          <div className="card-title">⚡ {t.costBreakdown} · {selYear} — Todas las naves</div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
+              <tbody>
+                {tenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>(
+                  <tr key={c.id}>
+                    <td>{ten.name}</td>
+                    <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
+                    <td><div>{c.icon} {c.name}</div>{c.nota&&<div style={{fontSize:11,color:"var(--warm)"}}>📝 {c.nota}</div>}</td>
+                    <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>{c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}</span></td>
+                    <td>{c.month}</td><td>{c.amount}€</td>
+                    <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(ten.id,c.id)}>🗑️</button></td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+        </div>
+      )}
+      {tab==="gastos"&&!verTodo&&(
+        <div>
+          {buildings.map(b=>{
+            const bTenants=getTenantsByBuilding(b);
+            const bCosts=bTenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>({...c,tenantName:ten.name,tenantId:ten.id})));
+            if(bTenants.length===0)return null;
+            const isOpen=openBuilding===("g_"+b);
+            const totalCosts=bCosts.reduce((s,c)=>s+(c.amount||0),0);
+            return(
+              <div key={b} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+                <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:"g_"+b)}>
+                  <div>
+                    <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bCosts.length} gastos · Total: {totalCosts}€</div>
+                  </div>
+                  <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
+                </div>
+                {isOpen&&(
+                  <div style={{padding:8,background:"white"}}>
+                    {bCosts.length===0
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:12}}>No hay gastos en {selYear}</p>
+                      :<div className="tbl-wrap">
+                        <table>
+                          <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
+                          <tbody>
+                            {bCosts.map(c=>(
+                              <tr key={c.id}>
+                                <td>{c.tenantName}</td>
+                                <td>
+                                  <div>{c.icon} {c.name}</div>
+                                  {c.nota&&<div style={{fontSize:11,color:"var(--warm)",marginTop:2}}>📝 {c.nota}</div>}
+                                </td>
+                                <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>
+                                  {c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}
+                                </span></td>
+                                <td>{c.month}</td>
+                                <td>{c.amount}€</td>
+                                <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(c.tenantId,c.id)}>🗑️</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div style={{marginTop:14}}><button className="btn btn-p" onClick={onAddCost}>➕ {t.addCost}</button></div>
+        </div>
+      )}
+
+      {/* TAB GRAFICOS */}
+      {tab==="graficos"&&(
+        <div className="card">
+          <div className="card-title">📊 Gráfico anual · {selYear}</div>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={chartData} margin={{top:8,right:8,left:0,bottom:0}}>
+              <XAxis dataKey="name" tick={{fontSize:11}}/>
+              <YAxis tick={{fontSize:11}} unit="€"/>
+              <Tooltip formatter={v=>v+"€"}/>
+              <Legend/>
+              <Bar dataKey="Ingresos" fill="#7A9E7E" radius={[4,4,0,0]}/>
+              <Bar dataKey="Gastos" fill="#D94F3D" radius={[4,4,0,0]}/>
+              <Bar dataKey="Inversión" fill="#4F46E5" radius={[4,4,0,0]}/>
+              <Bar dataKey="Profit" fill="#C4622D" radius={[4,4,0,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+          <div style={{marginTop:16,display:"flex",flexDirection:"column",gap:8}}>
+            {chartData.filter(d=>d.Ingresos>0||d.Gastos>0||d.Inversión>0).map(d=>(
+              <div key={d.name} style={{display:"flex",justifyContent:"space-between",padding:"8px 12px",background:"var(--cream)",borderRadius:10,fontSize:13}}>
+                <span style={{fontWeight:600,width:40}}>{d.name}</span>
+                <span style={{color:"var(--green)"}}>🟢 {d.Ingresos}€</span>
+                <span style={{color:"var(--red)"}}>🔴 {d.Gastos}€</span>
+                <span style={{color:"#4F46E5"}}>🏗️ {d.Inversión}€</span>
+                <span style={{fontWeight:600,color:d.Profit>=0?"var(--green)":"var(--red)"}}>{d.Profit>=0?"✅":"⚠️"} {d.Profit}€</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab==="extracto"&&<ExtractoTab tenants={tenants} onToggle={onToggle} onAddCost={onAddCost} monthsOfYear={monthsOfYear} selYear={selYear}/>}
+    </div>
+  );
+}
+
+// ─── EXTRACTO BANCARIO ─────────────────────────────────────────────────────
+function ExtractoTab({tenants, onToggle, monthsOfYear}) {
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [movimientos, setMovimientos] = useState([]);
+  const [applied, setApplied] = useState({});
+  const [selMonth, setSelMonth] = useState(monthsOfYear[new Date().getMonth()]||monthsOfYear[0]);
+
+  const parseExtracto = (text) => {
+    const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>5);
+    const movs = [];
+    const sep = (text.match(/;/g)||[]).length > (text.match(/,/g)||[]).length ? ";" : text.includes("\t") ? "\t" : ",";
+
+    // Detect CaixaBank format: Concepte;Data;Import;Saldo
+    const headerLine = lines[0]||"";
+    const isCaixa = /concepte|import|saldo/i.test(headerLine);
+
+    for(let li=0; li<lines.length; li++){
+      const line = lines[li];
+      // Skip header
+      if(li===0 && /concepte|fecha|date|concepto|importe|saldo/i.test(line)) continue;
+
+      const parts = line.split(sep).map(p=>p.replace(/"/g,"").trim());
+      if(parts.length < 3) continue;
+
+      let fecha="", descripcion="", importe=null;
+
+      if(isCaixa && parts.length>=3){
+        // Format: Concepte;Data;Import;Saldo
+        // Import looks like: +130,00EUR or -3.257,25EUR
+        descripcion = parts[0];
+        fecha = parts[1];
+        const importRaw = parts[2]
+          .replace(/EUR/gi,"")          // remove EUR
+          .replace(/\./g,"")            // remove thousand dots: 3.257 → 3257
+          .replace(",",".")             // decimal comma → dot: 130,00 → 130.00
+          .trim();
+        importe = parseFloat(importRaw);
+      } else {
+        // Generic fallback
+        const dateRe = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/;
+        const dateMatch = line.match(dateRe);
+        if(!dateMatch) continue;
+        fecha = dateMatch[1];
+        descripcion = parts[0];
+        for(let i=parts.length-1; i>=0; i--){
+          const raw = parts[i].replace(/EUR/gi,"").replace(/\s/g,"").replace(/\.(?=\d{3})/g,"").replace(",",".");
+          const n = parseFloat(raw);
+          if(!isNaN(n) && Math.abs(n)>0.01 && Math.abs(n)<999999){ importe=n; break; }
+        }
+      }
+
+      if(importe===null||isNaN(importe)||importe===0) continue;
+
+      const tipo = importe>0 ? "ingreso" : "gasto";
+      const abs = Math.abs(importe);
+
+      // Match tenant by rent amount (±2€) or name words
+      let tenantMatch = null;
+      for(const ten of tenants){
+        if(Math.abs(ten.rent - abs)<=2){ tenantMatch=ten.name; break; }
+        const words = ten.name.toLowerCase().split(" ").filter(w=>w.length>3);
+        if(words.some(w=>line.toLowerCase().includes(w))){ tenantMatch=ten.name; break; }
+      }
+
+      // Classify concept
+      let concepto="otro";
+      const ll = line.toLowerCase();
+      if(tenantMatch && tipo==="ingreso") concepto="alquiler";
+      else if(/alquiler|lloguer|arrendament|renta/.test(ll)) concepto="alquiler";
+      else if(/llum|luz|electricidad|endesa|iberdrola|naturgy|energia|gas|aigua|agua|suministro/.test(ll)) concepto="suministro";
+      else if(/reparaci|manten|obra|fontanero|electricista/.test(ll)) concepto="mantenimiento";
+
+      movs.push({fecha, descripcion:descripcion.slice(0,70), importe:abs, tipo, tenantMatch, concepto});
+    }
+    return movs;
+  };
+
+  const handleFile = async(e) => {
+    const f = e.target.files[0];
+    if(!f) return;
+    setFile(f); setMovimientos([]); setApplied({}); setLoading(true);
+    try{
+      const text = await new Promise((res,rej)=>{
+        const r=new FileReader();
+        r.onload=ev=>res(ev.target.result);
+        r.onerror=rej;
+        r.readAsText(f,"latin1");
+      });
+      setMovimientos(parseExtracto(text));
+    }catch(e){ alert("Error: "+e.message); }
+    setLoading(false);
+  };
+
+  const applyAll = async() => {
+    let count=0;
+    for(let i=0;i<movimientos.length;i++){
+      const mov=movimientos[i];
+      if(mov.tipo==="ingreso"&&mov.tenantMatch&&!applied[i]){
+        const ten=tenants.find(t=>t.name===mov.tenantMatch);
+        if(ten&&!((ten.payments||{})[selMonth]?.paid)){ await onToggle(ten.id,selMonth); count++; }
+      }
+    }
+    const a={};
+    movimientos.forEach((_,i)=>{if(movimientos[i].tipo==="ingreso"&&movimientos[i].tenantMatch)a[i]=true;});
+    setApplied(a);
+    alert(`✅ ${count} pagos marcados como cobrados en ${selMonth}`);
+  };
+
+  const totalIngresos=movimientos.filter(m=>m.tipo==="ingreso").reduce((s,m)=>s+m.importe,0);
+  const totalGastos=movimientos.filter(m=>m.tipo==="gasto").reduce((s,m)=>s+m.importe,0);
+  const identificados=movimientos.filter(m=>m.tenantMatch).length;
+  const cColors={alquiler:"#4A9B6F",suministro:"#4F46E5",mantenimiento:"#D4A853",otro:"#8C7B6E"};
+  const cLabels={alquiler:"🏠 Alquiler",suministro:"💡 Suministro",mantenimiento:"🔧 Mantenimiento",otro:"📋 Otro"};
+
+  return(
+    <div>
+      <div className="card" style={{marginBottom:16}}>
+        <div className="card-title">🏦 Extracto bancario</div>
+        <p style={{fontSize:13,color:"var(--warm)",marginBottom:14}}>
+          Sube el extracto en <strong>CSV o TXT</strong>. La app detecta movimientos y cruza los importes con las rentas de tus inquilinos.
+        </p>
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          <label style={{display:"flex",alignItems:"center",gap:8,padding:"10px 18px",background:"var(--terra)",color:"white",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:600}}>
+            📎 {file?file.name:"Seleccionar CSV / TXT"}
+            <input type="file" accept=".csv,.txt" onChange={handleFile} style={{display:"none"}}/>
+          </label>
+          <select value={selMonth} onChange={e=>setSelMonth(e.target.value)} style={{padding:"10px 12px",borderRadius:10,border:"1.5px solid var(--border)",fontSize:13}}>
+            {monthsOfYear.map(m=><option key={m} value={m}>{m}</option>)}
+          </select>
+          {loading&&<span style={{fontSize:13,color:"var(--warm)"}}>⏳ Leyendo...</span>}
+        </div>
+        {file&&movimientos.length===0&&!loading&&(
+          <p style={{marginTop:10,fontSize:12,color:"#D94F3D"}}>⚠️ No se detectaron movimientos. Comprueba que el archivo tiene fechas (DD/MM/YYYY) e importes numéricos.</p>
+        )}
       </div>
+
+      {movimientos.length>0&&(
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:12,marginBottom:16}}>
+            {[
+              {v:totalIngresos.toFixed(2)+"€",l:"💰 Ingresos",c:"#4A9B6F"},
+              {v:totalGastos.toFixed(2)+"€",l:"📤 Gastos",c:"#D94F3D"},
+              {v:(totalIngresos-totalGastos).toFixed(2)+"€",l:"📊 Balance",c:"var(--terra)"},
+              {v:identificados+"/"+movimientos.filter(m=>m.tipo==="ingreso").length,l:"🏠 Identificados",c:"#4F46E5"},
+            ].map((item,i)=>(
+              <div key={i} className="card" style={{padding:14,textAlign:"center",border:`2px solid ${item.c}`}}>
+                <div style={{fontSize:20,fontWeight:700,color:item.c}}>{item.v}</div>
+                <div style={{fontSize:11,color:"var(--warm)",textTransform:"uppercase",marginTop:2}}>{item.l}</div>
+              </div>
+            ))}
+          </div>
+
+          {movimientos.some(m=>m.tipo==="ingreso"&&m.tenantMatch)&&(
+            <div style={{marginBottom:16,display:"flex",gap:10,alignItems:"center",background:"#F0FAF4",border:"1.5px solid #4A9B6F",borderRadius:12,padding:"12px 16px",flexWrap:"wrap"}}>
+              <div style={{flex:1,fontSize:13}}>
+                <strong style={{color:"#4A9B6F"}}>{movimientos.filter(m=>m.tipo==="ingreso"&&m.tenantMatch).length} pagos identificados</strong>
+                <span style={{color:"var(--warm)",marginLeft:8}}>para <strong>{selMonth}</strong></span>
+              </div>
+              <button className="btn btn-p" onClick={applyAll}>✅ Marcar todos cobrados</button>
+            </div>
+          )}
+
+          <div className="card">
+            <div className="card-title">📋 Movimientos ({movimientos.length})</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {movimientos.map((mov,i)=>{
+                const isIng=mov.tipo==="ingreso";
+                const ten=mov.tenantMatch?tenants.find(t=>t.name===mov.tenantMatch):null;
+                const alreadyPaid=ten&&((ten.payments||{})[selMonth]?.paid);
+                const wasApplied=applied[i];
+                return(
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:10,border:`1.5px solid ${isIng?"#C8E6C9":"#FFCDD2"}`,background:isIng?"#F9FFF9":"#FFF8F8",flexWrap:"wrap"}}>
+                    <div style={{fontSize:18}}>{isIng?"💚":"🔴"}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:600,fontSize:13,marginBottom:3}}>{mov.descripcion}</div>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                        <span style={{fontSize:11,color:"var(--warm)"}}>{mov.fecha}</span>
+                        <span style={{fontSize:11,background:cColors[mov.concepto],color:"white",padding:"2px 8px",borderRadius:20}}>{cLabels[mov.concepto]}</span>
+                        {mov.tenantMatch&&<span style={{fontSize:11,background:"#E8F5E9",color:"#2E7D32",padding:"2px 8px",borderRadius:20,fontWeight:600}}>🏠 {mov.tenantMatch}</span>}
+                        {(alreadyPaid||wasApplied)&&<span style={{fontSize:11,color:"#4A9B6F",fontWeight:600}}>✅ Cobrado</span>}
+                      </div>
+                    </div>
+                    <div style={{fontWeight:700,fontSize:15,color:isIng?"#4A9B6F":"#D94F3D",flexShrink:0}}>{isIng?"+":"-"}{mov.importe.toFixed(2)}€</div>
+                    {isIng&&ten&&!alreadyPaid&&!wasApplied&&(
+                      <button className="btn btn-s btn-sm" onClick={async()=>{await onToggle(ten.id,selMonth);setApplied(a=>({...a,[i]:true}));}}>✅ Marcar cobrado</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -936,17 +2027,26 @@ function TenantMaintenance({t,profile,onSend}){
   );
 }
 
-function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
+function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,onEdit,onUploadContract,contracts,onDelete,onUpdateField}){
+  const now=new Date();
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const startYear=2024;
+  const allMonths=[];
+  for(let y=startYear;y<startYear+15;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
+  const currentMonth=`${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+
   const [costType,setCostType]=useState("💡 Electricidad");
+  const [costTipo,setCostTipo]=useState("gasto");
   const [costAmt,setCostAmt]=useState("");
-  const [costMonth,setCostMonth]=useState("Marzo 2025");
+  const [costMonth,setCostMonth]=useState(currentMonth);
+  const [costNota,setCostNota]=useState("");
   const months=Object.keys(tenant?.payments||{});
-  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","Otro":"📋"};
+  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
   if(!tenant)return null;
   const handleAddCost=()=>{
     if(!costAmt||!costMonth)return;
-    const icon=icons[costType]||"📋";const name=costType.replace(/^\S+\s/,"");
-    onAddCost(tenant.id,{icon,name,month:costMonth,amount:parseFloat(costAmt)});setCostAmt("");
+    const icon=icons[costType]||"📋";const name=costType.replace(/^[^\s]+\s/,"");
+    onAddCost(tenant.id,{icon,name,month:costMonth,amount:parseFloat(costAmt),tipo:costTipo,nota:costNota});setCostAmt("");setCostNota("");
   };
   return(
     <div className="modal">
@@ -954,6 +2054,7 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
         <h3>{tenant.name}</h3>
         <div style={{display:"flex",gap:8}}>
           <button className="btn btn-o btn-sm" onClick={onEdit}>✏️ {t.editData}</button>
+          <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={onDelete}>🗑️</button>
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
       </div>
@@ -967,27 +2068,96 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onClose,onEdit}){
         <div><div className="pf-lbl">{t.rent}</div><div className="pf-val">{tenant.rent}€/mes</div></div>
         <div><div className="pf-lbl">{t.contractStart}</div><div className="pf-val">{tenant.contractStart||"—"}</div></div>
         <div><div className="pf-lbl">{t.contractEnd}</div><div className="pf-val">{tenant.contractEnd||"—"}</div></div>
+        <div><div className="pf-lbl">📅 Frecuencia pago</div><div className="pf-val">{tenant.payFreq||"mensual"}</div></div>
+        <div><div className="pf-lbl">🔒 Fianza</div><div className="pf-val">{tenant.fianza==="si"?`✅ ${tenant.fianzaAmount||0}€`:"❌ No"}</div></div>
+        <div style={{gridColumn:"1/-1"}}>
+          <div className="pf-lbl">🧾 Tipo de documento</div>
+          <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+            <button className={`btn btn-sm ${(tenant.docType||"recibo")==="recibo"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","recibo")}>🧾 Recibo</button>
+            <button className={`btn btn-sm ${tenant.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","factura")}>🧾 Factura</button>
+            <button className={`btn btn-sm ${tenant.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>onUpdateField(tenant.id,"docType","ambos")}>🧾 Ambos</button>
+          </div>
+          {tenant.docType==="ambos"&&(
+            <div style={{marginTop:8,background:"var(--cream)",borderRadius:10,padding:10,fontSize:13}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span style={{color:"var(--warm)"}}>Importe Recibo</span><strong>{tenant.rentRecibo||0}€</strong>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+                <span style={{color:"var(--warm)"}}>Importe Factura</span><strong>{tenant.rentFactura||0}€</strong>
+              </div>
+            </div>
+          )}
+        </div>
+        {tenant.notes&&<div style={{gridColumn:"1/-1"}}>
+          <div className="pf-lbl">📝 Notas</div>
+          <div className="pf-val" style={{fontSize:13,whiteSpace:"pre-wrap"}}>{tenant.notes}</div>
+        </div>}
       </div>
+      <hr/>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>📝 Contratos</div>
+      {(contracts||[]).filter(c=>c.tenantUid===tenant.id).length===0
+        ?<p style={{fontSize:13,color:"var(--warm)",marginBottom:8}}>No hay contratos adjuntos</p>
+        :(contracts||[]).filter(c=>c.tenantUid===tenant.id).map(c=>(
+          <div key={c.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+            <span style={{fontSize:22}}>📄</span>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,fontSize:13}}>{c.unit||tenant.unit}</div>
+              <div style={{fontSize:11,color:"var(--warm)"}}>{c.startDay}/{c.startMonth}/{c.startYear} → {c.endDay}/{c.endMonth}/{c.endYear} · {c.rent}€/mes</div>
+            </div>
+            <button className="btn btn-o btn-sm" onClick={()=>generateContractDocx(c)}>📥</button>
+          </div>
+        ))}
+      <button className="btn btn-o" style={{marginBottom:16,marginTop:8}} onClick={onUploadContract}>➕ Adjuntar contrato</button>
       <hr/>
       <div className="serif" style={{fontSize:16,marginBottom:12}}>{t.paymentHistory}</div>
       {months.map(m=>{const p=(tenant.payments||{})[m];return(<div key={m} className="cr"><div className="cn">{m}</div><div style={{display:"flex",alignItems:"center",gap:8}}><span className="badge" style={p.paid?{background:"#E6F4ED",color:"#4A9B6F"}:{background:"#FDECEA",color:"#D94F3D"}}>{p.paid?`✓ ${p.date}`:"✗ Pendiente"}</span><button className="btn btn-o btn-sm" onClick={()=>onToggle(tenant.id,m)}>{p.paid?t.revert:t.markPaid}</button></div></div>);})}
       <hr/>
+      <div className="serif" style={{fontSize:16,marginBottom:12}}>⚡ Costes registrados</div>
+      {(tenant.costs||[]).length===0
+        ?<p style={{fontSize:13,color:"var(--warm)",marginBottom:12}}>{t.noCosts}</p>
+        :(tenant.costs||[]).map(c=>(
+          <div key={c.id} style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14}}>{c.icon} {c.name} · <strong>{c.amount}€</strong></div>
+              <div style={{fontSize:12,color:"var(--warm)"}}>{c.month} · {c.tipo==="inversion"?"🏗️ Inversión (tuya)":"💸 Gasto"}</div>
+              {c.nota&&<div style={{fontSize:12,color:"#555",marginTop:2}}>📝 {c.nota}</div>}
+            </div>
+            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)",marginLeft:8,flexShrink:0}} onClick={()=>onDeleteCost(tenant.id,c.id)}>🗑️</button>
+          </div>
+        ))}
+      <div style={{marginBottom:16}}/>
       <div className="serif" style={{fontSize:16,marginBottom:12}}>➕ {t.addCost}</div>
+      <div className="fg">
+        <label>Tipo</label>
+        <div style={{display:"flex",gap:8,marginTop:4}}>
+          <button className={`btn btn-sm ${costTipo==="gasto"?"btn-p":"btn-o"}`} onClick={()=>setCostTipo("gasto")}>💸 Gasto</button>
+          <button className={`btn btn-sm ${costTipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setCostTipo("inversion")}>🏗️ Inversión (mía)</button>
+        </div>
+      </div>
       <div className="gr2">
-        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
         <div className="fg"><label>{t.amount}</label><input type="number" value={costAmt} onChange={e=>setCostAmt(e.target.value)} placeholder="0"/></div>
       </div>
-      <div className="fg"><label>{t.month}</label><input value={costMonth} onChange={e=>setCostMonth(e.target.value)}/></div>
+      <div className="fg"><label>{t.month}</label>
+        <select value={costMonth} onChange={e=>setCostMonth(e.target.value)}>
+          {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
+      <div className="fg"><label>📝 Nota (opcional)</label><textarea value={costNota} onChange={e=>setCostNota(e.target.value)} placeholder="Ej: Cambio de caldera..."/></div>
       <button className="btn btn-p" onClick={handleAddCost}>➕ {t.addCost}</button>
     </div>
   );
 }
 
-function EditTenantModal({t,tenant,onClose,onSave}){
+function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
   const [form,setForm]=useState({
     name:tenant?.name||"",unit:tenant?.unit||"",phone:tenant?.phone||"",
     rent:tenant?.rent||"",email:tenant?.email||"",
-    contractStart:tenant?.contractStart||"",contractEnd:tenant?.contractEnd||""
+    contractStart:tenant?.contractStart||"",contractEnd:tenant?.contractEnd||"",
+    building:tenant?.building||"",docType:tenant?.docType||"recibo",
+    payFreq:tenant?.payFreq||"mensual",fianza:tenant?.fianza||"no",
+    fianzaAmount:tenant?.fianzaAmount||"",notes:tenant?.notes||"",
+    rentRecibo:tenant?.rentRecibo||"",rentFactura:tenant?.rentFactura||""
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(!tenant)return null;
@@ -995,6 +2165,12 @@ function EditTenantModal({t,tenant,onClose,onSave}){
     <div className="modal">
       <div className="modal-hd"><h3>✏️ {t.editTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
       <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
+      <div className="fg"><label>🏢 Nave / Edificio</label>
+        <select value={form.building} onChange={e=>set("building",e.target.value)}>
+          <option value="">— Sin nave asignada —</option>
+          {(propBuildings||[]).filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
+        </select>
+      </div>
       <div className="gr2">
         <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
         <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
@@ -1008,54 +2184,1338 @@ function EditTenantModal({t,tenant,onClose,onSave}){
         <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
         <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
       </div>
+      <div className="fg">
+        <label>🧾 Tipo de documento</label>
+        <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+          <button className={`btn btn-sm ${form.docType==="recibo"?"btn-p":"btn-o"}`} onClick={()=>set("docType","recibo")}>🧾 Recibo</button>
+          <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
+          <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
+        </div>
+        {form.docType==="ambos"&&(
+          <div style={{marginTop:10,background:"var(--cream)",borderRadius:10,padding:12}}>
+            <p style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Divide el importe entre recibo y factura:</p>
+            <div className="gr2">
+              <div className="fg"><label>Importe Recibo €</label><input type="number" placeholder="0" value={form.rentRecibo||""} onChange={e=>set("rentRecibo",e.target.value)}/></div>
+              <div className="fg"><label>Importe Factura €</label><input type="number" placeholder="0" value={form.rentFactura||""} onChange={e=>set("rentFactura",e.target.value)}/></div>
+            </div>
+            {form.rentRecibo&&form.rentFactura&&<p style={{fontSize:11,marginTop:4,color:"var(--sage)",fontWeight:600}}>Total: {(parseFloat(form.rentRecibo||0)+parseFloat(form.rentFactura||0))}€</p>}
+          </div>
+        )}
+      </div>
+      <div className="fg">
+        <label>📅 Frecuencia de pago</label>
+        <select value={form.payFreq} onChange={e=>set("payFreq",e.target.value)}>
+          <option value="mensual">Mensual</option>
+          <option value="2meses">Cada 2 meses</option>
+          <option value="3meses">Cada 3 meses</option>
+          <option value="4meses">Cada 4 meses</option>
+          <option value="6meses">Cada 6 meses</option>
+        </select>
+      </div>
+      <div className="fg">
+        <label>🔒 Fianza</label>
+        <div style={{display:"flex",gap:8,marginTop:6}}>
+          <button className={`btn btn-sm ${form.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>set("fianza","si")}>✅ Sí</button>
+          <button className={`btn btn-sm ${form.fianza==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("fianza","no")}>❌ No</button>
+        </div>
+        {form.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe €" value={form.fianzaAmount} onChange={e=>set("fianzaAmount",e.target.value)}/>}
+      </div>
+      <div className="fg">
+        <label>📝 Notas</label>
+        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} rows={3} style={{width:"100%",padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/>
+      </div>
       <button className="btn btn-p btn-full" onClick={()=>onSave(tenant.id,form)}>💾 {t.save}</button>
     </div>
   );
 }
 
-function NewTenantModal({t,onClose,onSave}){
-  const [form,setForm]=useState({name:"",unit:"",phone:"",rent:"",email:"",password:"",contractStart:"",contractEnd:""});
+function NewTenantModal({t,onClose,onSave,onAddContract,buildings=[]}){
+  const [form,setForm]=useState({
+    name:"",unit:"",phone:"",rent:"",contractStart:"",contractEnd:"",
+    building:"",docType:"recibo",payFreq:"mensual",
+    fianza:"",fianzaAmount:"",
+    notes:""
+  });
+  const [saved,setSaved]=useState(false);
+  const [savedId,setSavedId]=useState(null);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  const handleSave=async()=>{
+    const id=await onSave(form);
+    setSavedId(id);
+    setSaved(true);
+  };
+
   return(
     <div className="modal">
       <div className="modal-hd"><h3>➕ {t.newTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
-      <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
-      <div className="gr2">
-        <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)}/></div>
-        <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
-      </div>
-      <div className="fg"><label>{t.rent}</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
-      <div className="gr2">
-        <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
-        <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
-      </div>
-      <hr/>
-      <div className="fg"><label>{t.email} (acceso)</label><input type="email" value={form.email} onChange={e=>set("email",e.target.value)}/></div>
-      <div className="fg"><label>{t.password}</label><input type="password" value={form.password} onChange={e=>set("password",e.target.value)}/></div>
-      <button className="btn btn-p btn-full" onClick={()=>onSave(form)}>{t.createAccess}</button>
+      {!saved?<>
+        <div className="fg"><label>{t.name}</label><input value={form.name} onChange={e=>set("name",e.target.value)}/></div>
+        <div className="fg"><label>🏢 Nave / Edificio</label>
+          <select value={form.building} onChange={e=>set("building",e.target.value)}>
+            <option value="">— Seleccionar nave —</option>
+            {buildings.filter(b=>b).map(b=><option key={b} value={b}>{b}</option>)}
+          </select>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>{t.unit}</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Trastero 7, Local 2..."/></div>
+          <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+        </div>
+        <div className="fg"><label>{t.rent} €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
+        <div className="gr2">
+          <div className="fg"><label>{t.contractStart}</label><input type="date" value={form.contractStart} onChange={e=>set("contractStart",e.target.value)}/></div>
+          <div className="fg"><label>{t.contractEnd}</label><input type="date" value={form.contractEnd} onChange={e=>set("contractEnd",e.target.value)}/></div>
+        </div>
+        <hr/>
+        <div className="fg">
+          <label>🧾 Tipo de documento</label>
+          <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+            <button className={`btn btn-sm ${form.docType==="recibo"?"btn-p":"btn-o"}`} onClick={()=>set("docType","recibo")}>🧾 Recibo</button>
+            <button className={`btn btn-sm ${form.docType==="factura"?"btn-s":"btn-o"}`} onClick={()=>set("docType","factura")}>🧾 Factura</button>
+            <button className={`btn btn-sm ${form.docType==="ambos"?"btn-p":"btn-o"}`} onClick={()=>set("docType","ambos")}>🧾 Ambos</button>
+          </div>
+          {form.docType==="ambos"&&(
+            <div style={{marginTop:10,background:"var(--cream)",borderRadius:10,padding:12}}>
+              <p style={{fontSize:12,color:"var(--warm)",marginBottom:8}}>Divide el importe total entre recibo y factura:</p>
+              <div className="gr2">
+                <div className="fg"><label>Importe Recibo €</label><input type="number" placeholder="0" value={form.rentRecibo||""} onChange={e=>set("rentRecibo",e.target.value)}/></div>
+                <div className="fg"><label>Importe Factura €</label><input type="number" placeholder="0" value={form.rentFactura||""} onChange={e=>set("rentFactura",e.target.value)}/></div>
+              </div>
+              {form.rentRecibo&&form.rentFactura&&<p style={{fontSize:11,marginTop:4,color:"var(--sage)",fontWeight:600}}>Total: {(parseFloat(form.rentRecibo||0)+parseFloat(form.rentFactura||0))}€</p>}
+            </div>
+          )}
+        </div>
+        <div className="fg">
+          <label>📅 Frecuencia de pago</label>
+          <select value={form.payFreq} onChange={e=>set("payFreq",e.target.value)} style={{marginTop:4}}>
+            <option value="mensual">Mensual</option>
+            <option value="2meses">Cada 2 meses</option>
+            <option value="3meses">Cada 3 meses</option>
+            <option value="4meses">Cada 4 meses</option>
+            <option value="6meses">Cada 6 meses</option>
+          </select>
+        </div>
+        <hr/>
+        <div className="fg">
+          <label>🔒 Fianza</label>
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button className={`btn btn-sm ${form.fianza==="si"?"btn-p":"btn-o"}`} onClick={()=>set("fianza","si")}>✅ Sí, me han dado fianza</button>
+            <button className={`btn btn-sm ${form.fianza==="no"?"btn-o btn-active":"btn-o"}`} onClick={()=>set("fianza","no")}>❌ No</button>
+          </div>
+          {form.fianza==="si"&&<input style={{marginTop:8}} type="number" placeholder="Importe fianza €" value={form.fianzaAmount} onChange={e=>set("fianzaAmount",e.target.value)}/>}
+        </div>
+        <div className="fg">
+          <label>📝 Notas / Comentarios</label>
+          <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} placeholder="Observaciones, acuerdos especiales..." rows={3} style={{width:"100%",padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/>
+        </div>
+        <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.name||!form.unit||!form.rent}>
+          ✅ Crear inquilino
+        </button>
+      </>:<>
+        <div style={{textAlign:"center",padding:"16px 0"}}>
+          <div style={{fontSize:48,marginBottom:10}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:20,marginBottom:6}}>{form.name} creado</h3>
+          <p style={{color:"var(--warm)",fontSize:13,marginBottom:20}}>El inquilino ya aparece en la lista.</p>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <button className="btn btn-p" onClick={()=>{onAddContract(savedId,form);onClose();}}>
+              📝 Añadir contrato
+            </button>
+            <button className="btn btn-o" onClick={onClose}>Cerrar</button>
+          </div>
+        </div>
+      </>}
     </div>
   );
 }
 
 function AddCostModal({t,tenants,onSave,onClose}){
+  const now=new Date();
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const startYear=2024; const endYear=startYear+15;
+  const allMonths=[];
+  for(let y=startYear;y<endYear;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
+  const currentMonth=`${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+
   const [tid,setTid]=useState(tenants[0]?.id||"");
   const [costType,setCostType]=useState("💡 Electricidad");
-  const [amount,setAmount]=useState("");const [month,setMonth]=useState("Marzo 2025");
-  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","Otro":"📋"};
-  const handle=()=>{if(!amount)return;const icon=icons[costType]||"📋";const name=costType.replace(/^\S+\s/,"");onSave(tid,{icon,name,month,amount:parseFloat(amount)});};
+  const [tipo,setTipo]=useState("gasto"); // gasto | inversion
+  const [amount,setAmount]=useState("");
+  const [month,setMonth]=useState(currentMonth);
+  const [nota,setNota]=useState("");
+  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
+  const handle=()=>{
+    if(!amount)return;
+    const icon=icons[costType]||"📋";
+    const name=costType.replace(/^\S+\s/,"");
+    onSave(tid,{icon,name,month,amount:parseFloat(amount),tipo,nota});
+  };
   return(
     <div className="modal">
       <div className="modal-hd"><h3>➕ {t.addCost}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
       <div className="fg"><label>{t.tenant}</label><select value={tid} onChange={e=>setTid(e.target.value)}>{tenants.map(ten=><option key={ten.id} value={ten.id}>{ten.name} ({ten.unit})</option>)}</select></div>
+      <div className="fg">
+        <label>Tipo</label>
+        <div style={{display:"flex",gap:10,marginTop:4}}>
+          <button className={`btn btn-sm ${tipo==="gasto"?"btn-p":"btn-o"}`} onClick={()=>setTipo("gasto")}>💸 Gasto</button>
+          <button className={`btn btn-sm ${tipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setTipo("inversion")}>🏗️ Inversión (mía)</button>
+        </div>
+        {tipo==="inversion"&&<p style={{fontSize:12,color:"var(--warm)",marginTop:6}}>Esta inversión la asumes tú, no se carga al inquilino</p>}
+      </div>
       <div className="gr2">
-        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
         <div className="fg"><label>{t.amount}</label><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"/></div>
       </div>
-      <div className="fg"><label>{t.month}</label><input value={month} onChange={e=>setMonth(e.target.value)}/></div>
+      <div className="fg"><label>{t.month}</label>
+        <select value={month} onChange={e=>setMonth(e.target.value)}>
+          {allMonths.map(m=><option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
+      <div className="fg"><label>📝 Nota (opcional)</label><textarea value={nota} onChange={e=>setNota(e.target.value)} placeholder="Ej: Cambio de caldera, pintura piso..."/></div>
       <button className="btn btn-p btn-full" onClick={handle}>{t.save}</button>
     </div>
   );
 }
+
+function DocumentsPage({t,tenants,documents,onGenerate}){
+  const startYear=2024; const endYear=startYear+15;
+  const years=Array.from({length:15},(_,i)=>startYear+i);
+  const now=new Date();
+  const [selYear,setSelYear]=useState(now.getFullYear());
+  const [generating,setGenerating]=useState(false);
+
+  const handle=async()=>{
+    setGenerating(true);
+    await onGenerate(selYear);
+    setGenerating(false);
+  };
+
+  // Summary for selected year
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const months=monthNames.map(m=>`${m} ${selYear}`);
+  const totI=months.reduce((s,m)=>s+tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((ss,t)=>ss+(t.rent||0),0),0);
+  const totG=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
+  const totInv=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
+  const profit=totI-totG-totInv;
+
+  return(
+    <div>
+      <div className="page-hd"><h2>📁 {t.documents}</h2><p>Resúmenes anuales en Excel</p></div>
+
+      <div className="card">
+        <div className="card-title">📊 {t.generateExcel}</div>
+        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:20}}>
+          <select className="status-sel" style={{padding:"10px 14px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
+            {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+          <button className="btn btn-p" onClick={handle} disabled={generating}>
+            {generating?"⏳ Generando...":"📥 Generar Excel "+selYear}
+          </button>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:8}}>
+          <div style={{background:"#E6F4ED",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INGRESOS {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--green)"}}>{totI}€</div>
+          </div>
+          <div style={{background:"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>GASTOS {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--red)"}}>{totG}€</div>
+          </div>
+          <div style={{background:"#EEF2FF",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INVERSIÓN {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#4F46E5"}}>{totInv}€</div>
+          </div>
+          <div style={{background:profit>=0?"#E6F4ED":"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>PROFIT {selYear}</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:profit>=0?"var(--green)":"var(--red)"}}>{profit}€</div>
+          </div>
+        </div>
+        <p style={{fontSize:12,color:"var(--warm)",marginTop:8}}>El Excel incluye 4 hojas: Resumen, Pagos, Gastos e Inquilinos</p>
+      </div>
+
+      <div className="card">
+        <div className="card-title">🗂️ Documentos generados</div>
+        {documents.length===0
+          ?<p style={{color:"var(--warm)",fontSize:14}}>{t.noDocuments}</p>
+          :documents.map(doc=>(
+            <div key={doc.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 0",borderBottom:"1px solid var(--border)"}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:15}}>📊 MiAlquiler_Resumen_{doc.year}.xlsx</div>
+                <div style={{fontSize:12,color:"var(--warm)",marginTop:3}}>
+                  Generado el {doc.date} · Ingresos: {doc.totI}€ · Gastos: {doc.totG}€ · Profit: <span style={{color:doc.profit>=0?"var(--green)":"var(--red)",fontWeight:600}}>{doc.profit}€</span>
+                </div>
+              </div>
+              <button className="btn btn-o btn-sm" onClick={()=>generateAnnualExcel(tenants,doc.year)}>
+                📥 {t.downloadDoc}
+              </button>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function ContractsPage({t,contracts,onNew,onUpload,onDownload,onDelete}){
+  const byYear={};
+  contracts.forEach(c=>{
+    const y=c.year||c.signYear||"Sin año";
+    if(!byYear[y])byYear[y]=[];
+    byYear[y].push(c);
+  });
+  const years=Object.keys(byYear).sort((a,b)=>b-a);
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>📝 {t.contracts}</h2><p>{contracts.length} contratos</p></div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o" onClick={onUpload}>📤 Subir contrato firmado</button>
+          <button className="btn btn-p" onClick={onNew}>➕ {t.newContract}</button>
+        </div>
+      </div>
+      {contracts.length===0
+        ?<div className="card"><p style={{color:"var(--warm)",textAlign:"center",padding:20}}>📂 {t.noContracts}</p></div>
+        :years.map(year=>(
+          <div key={year} className="card">
+            <div className="card-title">📁 {year}</div>
+            {byYear[year].map(c=>(
+              <div key={c.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 0",borderBottom:"1px solid var(--border)"}}>
+                <div style={{fontSize:28}}>📄</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600,fontSize:15}}>📄 {c.unit} — {c.tenantName}</div>
+                  <div style={{fontSize:12,color:"var(--warm)",marginTop:2}}>
+                    Firmado el {c.signDay}/{c.signMonth}/{c.signYear} · {c.startDay}/{c.startMonth}/{c.startYear} → {c.endDay}/{c.endMonth}/{c.endYear} · {c.rent}€/mes
+                  </div>
+                </div>
+                <button className="btn btn-o btn-sm" onClick={()=>onDownload(c)}>📥 {t.downloadDoc}</button>
+                <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar este contrato?"))onDelete(c.id);}}>🗑️</button>
+              </div>
+            ))}
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function UploadContractModal({t,onClose,onSave,prefill}){
+  const [step,setStep]=useState(1);
+  const [pdfName,setPdfName]=useState("");
+  const [saving,setSaving]=useState(false);
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const now=new Date();
+  const [form,setForm]=useState({
+    unit:prefill?.unit||"",tenantName:prefill?.name||"",tenantDni:prefill?.dni||"",
+    tenantAddress:prefill?.address||"",phone:prefill?.phone||"",email:prefill?.email||"",
+    rent:prefill?.rent||"",
+    signDay:"",signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
+    startDay:prefill?.contractStart?.split("-")[2]||"1",
+    startMonth:prefill?.contractStart?monthNames[parseInt(prefill.contractStart.split("-")[1])-1]:monthNames[now.getMonth()],
+    startYear:prefill?.contractStart?.split("-")[0]||String(now.getFullYear()),
+    endDay:prefill?.contractEnd?.split("-")[2]||"",
+    endMonth:prefill?.contractEnd?monthNames[parseInt(prefill.contractEnd.split("-")[1])-1]:"",
+    endYear:prefill?.contractEnd?.split("-")[0]||"",
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const toISO=(day,month,year)=>{const idx=monthNames.indexOf((month||"").toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
+
+  const handleSave=async()=>{
+    setSaving(true);
+    await onSave({...form,
+      contractStartISO:toISO(form.startDay,form.startMonth,form.startYear),
+      contractEndISO:toISO(form.endDay,form.endMonth,form.endYear),
+    });
+    setSaving(false);
+    setStep(2);
+  };
+
+  const bar=(active,total)=>(
+    <div style={{display:"flex",gap:6,marginBottom:18}}>
+      {Array.from({length:total},(_,i)=>(
+        <div key={i} style={{flex:1,height:4,borderRadius:4,background:i<active?"var(--terra)":"var(--border)"}}/>
+      ))}
+    </div>
+  );
+
+  return(
+    <div className="modal" style={{maxWidth:560}}>
+      {step===1&&<>
+        <div className="modal-hd"><h3>📤 Subir contrato firmado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(1,2)}
+        <p style={{fontSize:13,color:"var(--warm)",marginBottom:16}}>Introduce los datos del contrato firmado.</p>
+
+        <div className="fg"><label>Piso / Habitación / Trastero</label>
+          <input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Trastero 7, Piso 1..."/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Nombre completo inquilino</label>
+            <input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/>
+          </div>
+          <div className="fg"><label>DNI / NIE</label>
+            <input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/>
+          </div>
+        </div>
+        <div className="fg"><label>Domicilio del inquilino</label>
+          <input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Teléfono</label>
+            <input value={form.phone} onChange={e=>set("phone",e.target.value)}/>
+          </div>
+          <div className="fg"><label>Alquiler €/mes</label>
+            <input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/>
+          </div>
+        </div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas del contrato</div>
+        <div className="gr2">
+          <div className="fg"><label>Fecha de firma</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
+              <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+            </div>
+          </div>
+          <div className="fg"><label>Inicio</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
+              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
+              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
+            </div>
+          </div>
+        </div>
+        <div className="fg"><label>Fin del contrato</label>
+          <div style={{display:"flex",gap:4}}>
+            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)} placeholder="día"/>
+            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)} placeholder="mes"/>
+            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)} placeholder="año"/>
+          </div>
+        </div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Adjuntar PDF (opcional)</div>
+        <label style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",background:"var(--cream)",borderRadius:10,cursor:"pointer",marginBottom:16}}>
+          <span style={{fontSize:20}}>📎</span>
+          <span style={{fontSize:13,color:"var(--warm)"}}>{pdfName||"Seleccionar PDF del contrato"}</span>
+          <input type="file" accept=".pdf" onChange={e=>setPdfName(e.target.files[0]?.name||"")} style={{display:"none"}}/>
+        </label>
+        <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.unit||!form.tenantName||!form.rent||saving}>
+          {saving?"⏳ Guardando...":"✅ Guardar contrato y crear inquilino"}
+        </button>
+      </>}
+
+      {step===2&&<>
+        <div className="modal-hd"><h3>✅ ¡Listo!</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(2,2)}
+        <div style={{textAlign:"center",padding:"20px 0"}}>
+          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:8}}>¡Contrato guardado!</h3>
+          <p style={{color:"var(--warm)",fontSize:14,marginBottom:20}}>
+            <strong>{form.tenantName}</strong> ya aparece en Inquilinos.<br/>El contrato está guardado en Contratos.
+          </p>
+          <div style={{background:"var(--cream)",borderRadius:12,padding:14,textAlign:"left",fontSize:13,marginBottom:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Piso</span><strong>{form.unit}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.tenantName}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
+          </div>
+          <button className="btn btn-o" onClick={onClose}>Cerrar</button>
+        </div>
+      </>}
+    </div>
+  );
+}
+
+function NewContractModal({t,onClose,onSave}){
+  const now=new Date();
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const [step,setStep]=useState(1);
+  const [tenantSigned,setTenantSigned]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [savedData,setSavedData]=useState(null);
+  const [form,setForm]=useState({
+    unit:"",tenantName:"",tenantDni:"",tenantAddress:"",phone:"",email:"",password:"",rent:"",
+    signDay:String(now.getDate()),signMonth:monthNames[now.getMonth()],signYear:String(now.getFullYear()),
+    startDay:"1",startMonth:monthNames[now.getMonth()],startYear:String(now.getFullYear()),
+    endDay:"28",endMonth:monthNames[now.getMonth()],endYear:String(now.getFullYear()+2),
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const toISO=(day,month,year)=>{const idx=monthNames.indexOf(month.toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
+
+  const handleSign=async()=>{
+    if(!tenantSigned)return;
+    setSaving(true);
+    const data={...form,contractStartISO:toISO(form.startDay,form.startMonth,form.startYear),contractEndISO:toISO(form.endDay,form.endMonth,form.endYear)};
+    await onSave(data);
+    setSavedData(data);
+    setSaving(false);
+    setStep(3);
+  };
+
+  const bar=(active,total)=>(
+    <div style={{display:"flex",gap:6,marginBottom:18}}>
+      {Array.from({length:total},(_,i)=>(
+        <div key={i} style={{flex:1,height:4,borderRadius:4,background:i<active?"var(--terra)":"var(--border)"}}/>
+      ))}
+    </div>
+  );
+
+  return(
+    <div className="modal" style={{maxWidth:560}}>
+      {step===1&&<>
+        <div className="modal-hd"><h3>📋 {t.contractDetails}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(1,3)}
+        <div className="fg"><label>Piso / Habitación / Trastero</label><input value={form.unit} onChange={e=>set("unit",e.target.value)} placeholder="Ej: Piso 1, Trastero 3..."/></div>
+        <div className="gr2">
+          <div className="fg"><label>{t.name}</label><input value={form.tenantName} onChange={e=>set("tenantName",e.target.value)}/></div>
+          <div className="fg"><label>{t.dni}</label><input value={form.tenantDni} onChange={e=>set("tenantDni",e.target.value)} placeholder="12345678A"/></div>
+        </div>
+        <div className="fg"><label>{t.address}</label><input value={form.tenantAddress} onChange={e=>set("tenantAddress",e.target.value)} placeholder="Calle, nº, ciudad"/></div>
+        <div className="gr2">
+          <div className="fg"><label>{t.phone}</label><input value={form.phone} onChange={e=>set("phone",e.target.value)}/></div>
+          <div className="fg"><label>{t.rent} €/mes</label><input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)}/></div>
+        </div>
+        <hr/>
+        <div style={{fontWeight:600,fontSize:12,marginBottom:10,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fechas</div>
+        <div className="gr2">
+          <div className="fg"><label>{t.signDate}</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
+              <input value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+            </div>
+          </div>
+          <div className="fg"><label>{t.startDate}</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)}/>
+              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)}/>
+              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
+            </div>
+          </div>
+        </div>
+        <div className="fg"><label>{t.endDate}</label>
+          <div style={{display:"flex",gap:4}}>
+            <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)}/>
+            <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)}/>
+            <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
+          </div>
+        </div>
+        <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.unit||!form.tenantName||!form.rent}>
+          Siguiente → Firma ›
+        </button>
+      </>}
+
+      {step===2&&<>
+        <div className="modal-hd"><h3>✍️ {t.tenantSignature}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(2,3)}
+        <div style={{background:"var(--cream)",borderRadius:12,padding:16,marginBottom:16,fontSize:13,lineHeight:1.8,maxHeight:240,overflowY:"auto"}}>
+          <p style={{fontWeight:700,textAlign:"center",marginBottom:10,fontSize:14}}>CONTRATO DE ARRENDAMIENTO — {form.unit.toUpperCase()}</p>
+          <p>📍 Calafell, <strong>{form.signDay} de {form.signMonth} de {form.signYear}</strong></p>
+          <p>👤 <strong>Arrendador:</strong> Joana Solé Santacana · DNI 39618190T</p>
+          <p>👤 <strong>Arrendatario:</strong> {form.tenantName} · DNI {form.tenantDni}</p>
+          <p>📅 <strong>Periodo:</strong> {form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</p>
+          <p>💶 <strong>Renta:</strong> {form.rent} €/mes · IPC + 1,5% anual</p>
+          <p style={{fontSize:11,color:"var(--warm)",marginTop:6}}>Suministros a cargo del arrendatario. Prohibido subarrendar sin consentimiento escrito.</p>
+        </div>
+        <div style={{background:tenantSigned?"#E6F4ED":"var(--cream)",border:`2px solid ${tenantSigned?"#4A9B6F":"var(--border)"}`,borderRadius:14,padding:16,marginBottom:16,cursor:"pointer",transition:"all .2s"}} onClick={()=>setTenantSigned(v=>!v)}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:26,height:26,borderRadius:7,border:`2px solid ${tenantSigned?"#4A9B6F":"var(--warm)"}`,background:tenantSigned?"#4A9B6F":"white",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:700,fontSize:16,flexShrink:0}}>
+              {tenantSigned?"✓":""}
+            </div>
+            <div>
+              <div style={{fontWeight:600,fontSize:13}}>✍️ {form.tenantName}</div>
+              <div style={{fontSize:12,color:"var(--warm)"}}>{t.tenantConfirm}</div>
+            </div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
+          <button className="btn btn-p" style={{flex:1}} onClick={handleSign} disabled={!tenantSigned||saving}>
+            {saving?"⏳ Guardando...":"✅ Firmar y guardar"}
+          </button>
+        </div>
+      </>}
+
+      {step===3&&<>
+        <div className="modal-hd"><h3>✅ Contrato guardado</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+        {bar(3,3)}
+        <div style={{textAlign:"center",padding:"16px 0"}}>
+          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:6}}>¡Contrato firmado!</h3>
+          <p style={{color:"var(--warm)",fontSize:13,marginBottom:18}}>Guardado en <strong>Contratos</strong>. El inquilino ya tiene acceso a la app.</p>
+          <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:18,textAlign:"left",fontSize:13}}>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Piso</span><strong>{form.unit}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.tenantName}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
+          </div>
+          <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+            <button className="btn btn-p" onClick={()=>generateContractDocx(savedData||form)}>📥 Descargar PDF</button>
+            <button className="btn btn-o" onClick={onClose}>Cerrar</button>
+          </div>
+        </div>
+      </>}
+    </div>
+  );
+}
+// ─── GENERATE INVOICE PDF ────────────────────────────────────────────
+function generateInvoicePDF(inv){
+  const pdf=new jsPDF({ format:"a4", unit:"mm" });
+  const W=210,M=20;
+  let y=20;
+  const line=()=>{pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=6;};
+  const row=(label,val,bold=false)=>{
+    pdf.setFontSize(10);
+    pdf.setFont("helvetica",bold?"bold":"normal");
+    pdf.text(label,M,y);
+    pdf.setFont("helvetica","bold");
+    pdf.text(String(val),W-M,y,{align:"right"});
+    pdf.setFont("helvetica","normal");
+    y+=7;
+  };
+
+  // Header
+  pdf.setFillColor(42,36,32);pdf.rect(0,0,W,38,"F");
+  pdf.setTextColor(255,255,255);pdf.setFontSize(22);pdf.setFont("helvetica","bold");
+  pdf.text("FACTURA",M,16);
+  pdf.setFontSize(10);pdf.setFont("helvetica","normal");
+  pdf.text(`Nº ${inv.invoiceNum}/${inv.year}`,M,24);
+  pdf.text(`Fecha: ${inv.date}`,M,30);
+  pdf.setTextColor(0,0,0);y=48;
+
+  // Emisor
+  pdf.setFontSize(9);pdf.setFont("helvetica","bold");pdf.text("EMISOR",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  ["JOANA SOLÉ SANTACANA","VIUDA DE JOAN SUAU OLIVELLA","PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª","43820 CALAFELL","DNI: 39618190T","bertasuau@gmail.com · 630 879 206"].forEach(l=>{pdf.text(l,M,y);y+=4.5;});
+  y+=4;
+
+  // Cliente
+  pdf.setFont("helvetica","bold");pdf.text("FACTURAR A",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  if(inv.clientName)pdf.text(inv.clientName,M,y),y+=4.5;
+  if(inv.clientNif)pdf.text(`NIF: ${inv.clientNif}`,M,y),y+=4.5;
+  if(inv.clientAddress)pdf.text(inv.clientAddress,M,y),y+=4.5;
+  if(inv.clientEmail)pdf.text(inv.clientEmail,M,y),y+=4.5;
+  y+=6;line();
+
+  // Concepto
+  pdf.setFillColor(245,240,235);pdf.rect(M,y-2,W-M*2,8,"F");
+  pdf.setFont("helvetica","bold");pdf.setFontSize(10);
+  pdf.text("DESCRIPCIÓN",M+2,y+4);pdf.text("IMPORTE",W-M-2,y+4,{align:"right"});
+  y+=12;pdf.setFont("helvetica","normal");
+  pdf.text(inv.concept||"Alquiler",M,y);
+  pdf.text(`€${parseFloat(inv.base).toFixed(2)}`,W-M,y,{align:"right"});
+  y+=10;line();
+
+  // Totals
+  const base=parseFloat(inv.base)||0;
+  const iva=base*0.21;
+  const irpf=base*0.19;
+  const total=base+iva-irpf;
+  row("SUBTOTAL",`€${base.toFixed(2)}`);
+  row("IVA 21%",`€${iva.toFixed(2)}`);
+  row("SUBTOTAL CON IVA",`€${(base+iva).toFixed(2)}`,true);
+  row("IRPF 19%",`-€${irpf.toFixed(2)}`);
+  y+=2;pdf.setFillColor(42,36,32);pdf.rect(M,y-4,W-M*2,12,"F");
+  pdf.setTextColor(255,255,255);pdf.setFont("helvetica","bold");pdf.setFontSize(12);
+  pdf.text("TOTAL",M+4,y+4);
+  pdf.text(`€${total.toFixed(2)}`,W-M-4,y+4,{align:"right"});
+  pdf.setTextColor(0,0,0);y+=18;
+
+  // Footer
+  pdf.setFontSize(9);pdf.setFont("helvetica","normal");
+  pdf.text("Gracias por hacer negocios con nosotros.",M,y);y+=5;
+  pdf.text("Contacto: Berta Suau · +34 630 879 206 · bertasuau@gmail.com",M,y);y+=5;
+  pdf.text("GIRO CUENTA: ES95 0049 2720 4126 1406 7889",M,y);
+
+  pdf.save(`Factura_${inv.invoiceNum}_${inv.year}_${inv.clientName||""}.pdf`);
+}
+
+// ─── GENERATE RECEIPT PDF ────────────────────────────────────────────
+function generateReceiptPDF(rec){
+  const pdf=new jsPDF({ format:"a4", unit:"mm" });
+  const W=210,M=20;
+  let y=20;
+
+  pdf.setFillColor(42,36,32);pdf.rect(0,0,W,38,"F");
+  pdf.setTextColor(255,255,255);pdf.setFontSize(22);pdf.setFont("helvetica","bold");
+  pdf.text("RECIBO",M,16);
+  pdf.setFontSize(10);pdf.setFont("helvetica","normal");
+  pdf.text(`Nº ${rec.receiptNum}/${rec.year}`,M,24);
+  pdf.text(`Fecha: ${rec.date}`,M,30);
+  pdf.setTextColor(0,0,0);y=48;
+
+  pdf.setFontSize(9);pdf.setFont("helvetica","bold");pdf.text("ARRENDADOR",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  ["JOANA SOLÉ SANTACANA","DNI: 39618190T","PASSEIG MARÍTIM SANT JOAN DE DÉU, 90, 5º 2ª, 43820 CALAFELL"].forEach(l=>{pdf.text(l,M,y);y+=4.5;});
+  y+=6;
+  pdf.setFont("helvetica","bold");pdf.text("ARRENDATARIO",M,y);y+=5;
+  pdf.setFont("helvetica","normal");
+  if(rec.clientName)pdf.text(rec.clientName,M,y),y+=4.5;
+  if(rec.clientDni)pdf.text(`DNI/NIE: ${rec.clientDni}`,M,y),y+=4.5;
+  y+=6;
+
+  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=8;
+  pdf.setFontSize(10);pdf.setFont("helvetica","bold");pdf.text("CONCEPTO",M,y);y+=6;
+  pdf.setFont("helvetica","normal");pdf.text(rec.concept||"Alquiler mensual",M,y);y+=10;
+  pdf.setDrawColor(200);pdf.line(M,y,W-M,y);y+=12;
+
+  pdf.setFontSize(9);pdf.setFont("helvetica","normal");
+  pdf.text("He recibido de la parte arrendataria la cantidad indicada en concepto de renta.",M,y);y+=5;
+  pdf.text("GIRO CUENTA: ES95 0049 2720 4126 1406 7889",M,y);y+=12;
+  pdf.text("Firma arrendador: _______________________",M,y);
+
+  pdf.save(`Recibo_${rec.receiptNum}_${rec.year}_${rec.clientName||""}.pdf`);
+}
+
+// ─── INVOICES PAGE ────────────────────────────────────────────────────
+function InvoicesPage({t,tenants,invoices,onNew,onDelete}){
+  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const [openTenant,setOpenTenant]=useState(null);
+
+  // Group invoices by tenantId
+  const invByTenant={};
+  invoices.forEach(inv=>{(invByTenant[inv.tenantId]=invByTenant[inv.tenantId]||[]).push(inv);});
+
+  // Group tenants by building
+  const groups={};
+  buildings.forEach(b=>groups[b]=[]);
+  groups["Sin nave"]=[];
+  tenants.forEach(ten=>{
+    if(ten.docType==="recibo")return; // skip recibo-only
+    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave";
+    groups[b].push(ten);
+  });
+  const allGroups=[...buildings,"Sin nave"].filter(b=>groups[b].length>0);
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>🧾 Facturas</h2><p>{invoices.length} facturas guardadas</p></div>
+      </div>
+      {allGroups.map(building=>(
+        <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+          <div style={{background:getBuildingColor(building),color:"white",padding:"10px 16px",fontFamily:"'DM Serif Display',serif",fontSize:15}}>
+            🏢 {building}
+          </div>
+          {groups[building].map(ten=>{
+            const invs=invByTenant[ten.id]||[];
+            const isOpen=openTenant===ten.id;
+            return(
+              <div key={ten.id} style={{borderBottom:"1px solid var(--border)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",cursor:"pointer",background:"white"}} onClick={()=>setOpenTenant(isOpen?null:ten.id)}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div className="av av-sm" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:14}}>{ten.name}</div>
+                      <div style={{fontSize:11,color:"var(--warm)"}}>{ten.unit} · {invs.length} facturas</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();onNew(ten.id);}}>➕ Nueva factura</button>
+                    <span style={{fontSize:16}}>{isOpen?"▲":"▼"}</span>
+                  </div>
+                </div>
+                {isOpen&&(
+                  <div style={{background:"var(--cream)",padding:"8px 16px"}}>
+                    {invs.length===0
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:"8px 0"}}>No hay facturas aún</p>
+                      :invs.sort((a,b)=>b.invoiceNum-a.invoiceNum).map(inv=>(
+                        <div key={inv.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                          <div>
+                            <div style={{fontWeight:600,fontSize:13}}>Factura {inv.invoiceNum}/{inv.year} · {inv.date}</div>
+                            <div style={{fontSize:11,color:"var(--warm)"}}>{inv.concept} · Base: {inv.base}€ · Total: {(parseFloat(inv.base)*(1+0.21-0.19)).toFixed(2)}€</div>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button className="btn btn-o btn-sm" onClick={()=>generateInvoicePDF(inv)}>📥</button>
+                            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar factura?"))onDelete(inv.id);}}>🗑️</button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {allGroups.length===0&&<div className="card"><p style={{textAlign:"center",color:"var(--warm)",padding:20}}>No hay inquilinos con factura</p></div>}
+    </div>
+  );
+}
+
+// ─── RECEIPTS PAGE ────────────────────────────────────────────────────
+function ReceiptsPage({t,tenants,receipts,onNew,onDelete}){
+  const buildings=["C/ Pou 61, Nau A","C/ Pou 61, Nau B","C/ Pou 61, Nau C"];
+  const getBuildingColor=(b)=>b.includes("Nau A")?"#7A9E7E":b.includes("Nau B")?"#C4622D":"#4F46E5";
+  const [openTenant,setOpenTenant]=useState(null);
+  const recByTenant={};
+  receipts.forEach(rec=>{(recByTenant[rec.tenantId]=recByTenant[rec.tenantId]||[]).push(rec);});
+  const groups={};
+  buildings.forEach(b=>groups[b]=[]);
+  groups["Sin nave"]=[];
+  tenants.forEach(ten=>{
+    if(ten.docType==="factura")return;
+    const b=ten.building&&buildings.includes(ten.building)?ten.building:"Sin nave";
+    groups[b].push(ten);
+  });
+  const allGroups=[...buildings,"Sin nave"].filter(b=>groups[b].length>0);
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div><h2>🖨️ Recibos</h2><p>{receipts.length} recibos guardados</p></div>
+      </div>
+      {allGroups.map(building=>(
+        <div key={building} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+          <div style={{background:getBuildingColor(building),color:"white",padding:"10px 16px",fontFamily:"'DM Serif Display',serif",fontSize:15}}>
+            🏢 {building}
+          </div>
+          {groups[building].map(ten=>{
+            const recs=recByTenant[ten.id]||[];
+            const isOpen=openTenant===ten.id;
+            return(
+              <div key={ten.id} style={{borderBottom:"1px solid var(--border)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",cursor:"pointer",background:"white"}} onClick={()=>setOpenTenant(isOpen?null:ten.id)}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div className="av av-sm" style={{background:getColor(ten.name)}}>{initials(ten.name)}</div>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:14}}>{ten.name}</div>
+                      <div style={{fontSize:11,color:"var(--warm)"}}>{ten.unit} · {recs.length} recibos</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <button className="btn btn-p btn-sm" onClick={e=>{e.stopPropagation();onNew(ten.id);}}>➕ Nuevo recibo</button>
+                    <span style={{fontSize:16}}>{isOpen?"▲":"▼"}</span>
+                  </div>
+                </div>
+                {isOpen&&(
+                  <div style={{background:"var(--cream)",padding:"8px 16px"}}>
+                    {recs.length===0
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:"8px 0"}}>No hay recibos aún</p>
+                      :recs.sort((a,b)=>b.receiptNum-a.receiptNum).map(rec=>(
+                        <div key={rec.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                          <div>
+                            <div style={{fontWeight:600,fontSize:13}}>Recibo {rec.receiptNum}/{rec.year} · {rec.date}</div>
+                            <div style={{fontSize:11,color:"var(--warm)"}}>{rec.concept} · {rec.amount}€</div>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button className="btn btn-o btn-sm" onClick={()=>generateReceiptPDF(rec)}>📥</button>
+                            <button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>{if(confirm("¿Eliminar recibo?"))onDelete(rec.id);}}>🗑️</button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── NEW INVOICE MODAL ────────────────────────────────────────────────
+function NewInvoiceModal({t,tenant,invoices,onClose,onSave}){
+  const now=new Date();
+  const year=now.getFullYear();
+  // Next invoice number: max existing + 1, starting from 7
+  const allNums=invoices.filter(i=>i.year===year).map(i=>i.invoiceNum);
+  const nextNum=allNums.length>0?Math.max(...allNums)+1:7;
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+  const [form,setForm]=useState({
+    invoiceNum:nextNum,year,
+    date:`${now.getDate()}/${now.getMonth()+1}/${year}`,
+    concept:`Alquiler ${tenant?.unit||""} ${monthNames[now.getMonth()]} ${year}`,
+    base:tenant?.rentFactura||tenant?.rent||"",
+    clientName:tenant?.name||"",clientNif:"",clientAddress:"",clientEmail:tenant?.email||""
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const base=parseFloat(form.base)||0;
+  const iva=base*0.21;
+  const irpf=base*0.19;
+  const total=base+iva-irpf;
+
+  const handleSave=async()=>{
+    await onSave({...form,tenantId:tenant.id,tenantName:tenant.name,invoiceNum:parseInt(form.invoiceNum)});
+    generateInvoicePDF({...form,tenantId:tenant.id,invoiceNum:parseInt(form.invoiceNum)});
+    onClose();
+  };
+
+  return(
+    <div className="modal" style={{maxWidth:520}}>
+      <div className="modal-hd"><h3>🧾 Nueva Factura</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="gr2">
+        <div className="fg"><label>Nº Factura</label><input type="number" value={form.invoiceNum} onChange={e=>set("invoiceNum",e.target.value)}/></div>
+        <div className="fg"><label>Fecha</label><input value={form.date} onChange={e=>set("date",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>Concepto</label><input value={form.concept} onChange={e=>set("concept",e.target.value)}/></div>
+      <div className="fg"><label>Base imponible €</label><input type="number" value={form.base} onChange={e=>set("base",e.target.value)}/></div>
+      {base>0&&(
+        <div style={{background:"var(--cream)",borderRadius:10,padding:12,marginBottom:12,fontSize:13}}>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>Subtotal</span><span>€{base.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>IVA 21%</span><span>€{iva.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}><span style={{color:"var(--warm)"}}>IRPF 19%</span><span>-€{irpf.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderTop:"2px solid var(--border)",fontWeight:700,marginTop:4}}><span>TOTAL</span><span>€{total.toFixed(2)}</span></div>
+        </div>
+      )}
+      <hr/>
+      <div style={{fontSize:12,fontWeight:600,color:"var(--warm)",marginBottom:8,textTransform:"uppercase"}}>Datos del cliente</div>
+      <div className="gr2">
+        <div className="fg"><label>Nombre / Empresa</label><input value={form.clientName} onChange={e=>set("clientName",e.target.value)}/></div>
+        <div className="fg"><label>NIF / DNI</label><input value={form.clientNif} onChange={e=>set("clientNif",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>Dirección</label><input value={form.clientAddress} onChange={e=>set("clientAddress",e.target.value)}/></div>
+      <div className="fg"><label>Email</label><input value={form.clientEmail} onChange={e=>set("clientEmail",e.target.value)}/></div>
+      <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.base||!form.clientName}>
+        💾 Guardar y descargar PDF
+      </button>
+    </div>
+  );
+}
+
+// ─── NEW RECEIPT MODAL ────────────────────────────────────────────────
+function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
+  const now=new Date();
+  const year=now.getFullYear();
+  const allNums=receipts.filter(r=>r.year===year).map(r=>r.receiptNum);
+  const nextNum=allNums.length>0?Math.max(...allNums)+1:1;
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+  const [form,setForm]=useState({
+    receiptNum:nextNum,year,
+    date:`${now.getDate()}/${now.getMonth()+1}/${year}`,
+    concept:`Alquiler ${tenant?.unit||""} ${monthNames[now.getMonth()]} ${year}`,
+    amount:tenant?.rentRecibo||tenant?.rent||"",
+    clientName:tenant?.name||"",clientDni:tenant?.dni||""
+  });
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+
+  const handleSave=async()=>{
+    await onSave({...form,tenantId:tenant.id,tenantName:tenant.name,receiptNum:parseInt(form.receiptNum)});
+    generateReceiptPDF({...form,tenantId:tenant.id,receiptNum:parseInt(form.receiptNum)});
+    onClose();
+  };
+
+  return(
+    <div className="modal" style={{maxWidth:480}}>
+      <div className="modal-hd"><h3>🖨️ Nuevo Recibo</h3><button className="close-btn" onClick={onClose}>✕</button></div>
+      <div className="gr2">
+        <div className="fg"><label>Nº Recibo</label><input type="number" value={form.receiptNum} onChange={e=>set("receiptNum",e.target.value)}/></div>
+        <div className="fg"><label>Fecha</label><input value={form.date} onChange={e=>set("date",e.target.value)}/></div>
+      </div>
+      <div className="fg"><label>Concepto</label><input value={form.concept} onChange={e=>set("concept",e.target.value)}/></div>
+      <div className="fg"><label>Importe €</label><input type="number" value={form.amount} onChange={e=>set("amount",e.target.value)}/></div>
+      <hr/>
+      <div className="gr2">
+        <div className="fg"><label>Nombre inquilino</label><input value={form.clientName} onChange={e=>set("clientName",e.target.value)}/></div>
+        <div className="fg"><label>DNI / NIE</label><input value={form.clientDni} onChange={e=>set("clientDni",e.target.value)}/></div>
+      </div>
+      <button className="btn btn-p btn-full" onClick={handleSave} disabled={!form.amount||!form.clientName}>
+        💾 Guardar y descargar PDF
+      </button>
+    </div>
+  );
+}
+
+// ─── TRASTEROS PAGE ──────────────────────────────────────────────────
+function TrasterosPage({t, tenants, buildings, onCreateTenant, trasteros, onAddTrastero, onDeleteTrastero}) {
+  const [modal, setModal] = useState(null);
+  const [newUnit, setNewUnit] = useState("");
+  const [newBuilding, setNewBuilding] = useState("");
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const buildingColors = ["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D"];
+  const naves = buildings.filter(b=>b);
+
+  const handleAddTrastero = async() => {
+    if(!newUnit.trim()||!newBuilding) return;
+    setSaving(true);
+    await onAddTrastero({unit:newUnit.trim(), building:newBuilding});
+    setNewUnit(""); setNewBuilding(""); setShowAddForm(false);
+    setSaving(false);
+  };
+
+  const byBuilding = {};
+  naves.forEach(b=>byBuilding[b]=[]);
+  byBuilding["Sin nave"]=[];
+  trasteros.forEach(tr=>{
+    const b = naves.includes(tr.building)?tr.building:"Sin nave";
+    (byBuilding[b]=byBuilding[b]||[]).push(tr);
+  });
+  const allGroups = [...naves,"Sin nave"].filter(b=>byBuilding[b]?.length>0);
+
+  const getTenant = (unit, building) => tenants.find(ten=>ten.unit===unit && ten.building===building);
+  const totalOcupados = trasteros.filter(tr=>getTenant(tr.unit,tr.building)).length;
+
+  return(
+    <div>
+      <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <h2>🏚️ Trasteros</h2>
+          <p>{trasteros.length} trasteros · 🔴 {totalOcupados} ocupados · 🟢 {trasteros.length-totalOcupados} libres</p>
+        </div>
+        <button className="btn btn-p" onClick={()=>setShowAddForm(v=>!v)}>➕ Añadir trastero</button>
+      </div>
+
+      {showAddForm && (
+        <div className="card" style={{marginBottom:20,border:"2px solid var(--terra)"}}>
+          <div className="card-title">➕ Nuevo trastero</div>
+          <div className="gr2">
+            <div className="fg">
+              <label>Nombre / número del trastero</label>
+              <input value={newUnit} onChange={e=>setNewUnit(e.target.value)} placeholder="Ej: Trastero 5, T-12, A3..."/>
+            </div>
+            <div className="fg">
+              <label>Nave</label>
+              <select value={newBuilding} onChange={e=>setNewBuilding(e.target.value)}>
+                <option value="">— Selecciona nave —</option>
+                {naves.map(b=><option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn btn-o" onClick={()=>{setShowAddForm(false);setNewUnit("");setNewBuilding("");}}>Cancelar</button>
+            <button className="btn btn-p" onClick={handleAddTrastero} disabled={!newUnit.trim()||!newBuilding||saving}>
+              {saving?"⏳ Guardando...":"✅ Guardar trastero"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {trasteros.length===0 && !showAddForm && (
+        <div className="card">
+          <p style={{color:"var(--warm)",textAlign:"center",padding:20}}>
+            No hay trasteros todavía. Haz clic en <strong>➕ Añadir trastero</strong> para crear el primero.
+          </p>
+        </div>
+      )}
+
+      {allGroups.map((building, bi) => {
+        const slots = byBuilding[building]||[];
+        const ocupados = slots.filter(s=>getTenant(s.unit,s.building)).length;
+        const color = buildingColors[bi % buildingColors.length];
+        return(
+          <div key={building} style={{marginBottom:20,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
+            <div style={{background:color,color:"white",padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18}}>🏢 {building}</div>
+                <div style={{fontSize:13,opacity:.85,marginTop:2}}>{slots.length} trasteros · {ocupados} ocupados · {slots.length-ocupados} libres</div>
+              </div>
+              <div style={{display:"flex",gap:10,fontSize:12}}>
+                <span style={{background:"rgba(255,255,255,0.2)",padding:"4px 12px",borderRadius:20}}>🔴 {ocupados}</span>
+                <span style={{background:"rgba(255,255,255,0.2)",padding:"4px 12px",borderRadius:20}}>🟢 {slots.length-ocupados}</span>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:10,padding:16,background:"var(--cream)"}}>
+              {slots.map(slot => {
+                const tenant = getTenant(slot.unit, slot.building);
+                const occupied = !!tenant;
+                return(
+                  <div key={slot.id} style={{position:"relative"}}>
+                    <div
+                      onClick={()=>{if(!occupied) setModal({building:slot.building, unit:slot.unit});}}
+                      style={{
+                        background:occupied?"#FFF0EE":"#F0FAF4",
+                        border:`2px solid ${occupied?"#D94F3D":"#4A9B6F"}`,
+                        borderRadius:12, padding:"12px 8px", textAlign:"center",
+                        cursor:occupied?"default":"pointer", transition:"all .2s"
+                      }}
+                      onMouseEnter={e=>{if(!occupied)e.currentTarget.style.transform="scale(1.04)";}}
+                      onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
+                    >
+                      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:17,fontWeight:700,color:occupied?"#D94F3D":"#4A9B6F",marginBottom:2}}>{slot.unit}</div>
+                      <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".4px",color:occupied?"#D94F3D":"#4A9B6F",marginBottom:4}}>
+                        {occupied?"🔴 Ocupado":"🟢 Libre"}
+                      </div>
+                      {occupied && (
+                        <div style={{fontSize:11,color:"#444",lineHeight:1.3}}>
+                          <div style={{fontWeight:600}}>{tenant.name}</div>
+                          <div style={{color:"var(--warm)",fontSize:10}}>{tenant.rent}€/mes</div>
+                          {tenant.contractEnd&&<div style={{color:"var(--warm)",fontSize:9,marginTop:1}}>hasta {tenant.contractEnd}</div>}
+                        </div>
+                      )}
+                      {!occupied && <div style={{fontSize:10,color:"#4A9B6F",marginTop:4}}>➕ Añadir inquilino</div>}
+                    </div>
+                    {!occupied && (
+                      <button
+                        onClick={()=>{if(confirm("¿Eliminar trastero "+slot.unit+"?")) onDeleteTrastero(slot.id);}}
+                        style={{position:"absolute",top:4,right:4,background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#bbb",padding:2,lineHeight:1}}
+                        title="Eliminar trastero"
+                      >✕</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {modal && (
+        <div className="overlay" onClick={()=>setModal(null)}>
+          <div onClick={e=>e.stopPropagation()}>
+            <NuevoTrasteroModal
+              t={t} building={modal.building} unit={modal.unit}
+              onClose={()=>setModal(null)}
+              onSave={async(data)=>{await onCreateTenant(data);setModal(null);}}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─── NUEVO TRASTERO MODAL ─────────────────────────────────────────────
+function SignaturePad({label, onSign, signed}) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+  const lastPos = useRef(null);
+
+  const getPos = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+  };
+
+  const start = (e) => {
+    e.preventDefault();
+    drawing.current = true;
+    lastPos.current = getPos(e, canvasRef.current);
+  };
+  const move = (e) => {
+    e.preventDefault();
+    if(!drawing.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const pos = getPos(e, canvas);
+    ctx.beginPath();
+    ctx.moveTo(lastPos.current.x, lastPos.current.y);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.strokeStyle = "#1A1612";
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.stroke();
+    lastPos.current = pos;
+    onSign(canvas.toDataURL());
+  };
+  const end = () => { drawing.current = false; };
+
+  const clear = (e) => {
+    e.stopPropagation();
+    const canvas = canvasRef.current;
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    onSign(null);
+  };
+
+  return(
+    <div style={{marginBottom:16}}>
+      <div style={{fontSize:12,fontWeight:600,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px",marginBottom:6}}>{label}</div>
+      <div style={{position:"relative",border:`2px solid ${signed?"#4A9B6F":"var(--border)"}`,borderRadius:10,background:"#fafafa",transition:"border-color .2s"}}>
+        <canvas
+          ref={canvasRef} width={460} height={120}
+          style={{display:"block",width:"100%",height:120,borderRadius:8,touchAction:"none",cursor:"crosshair"}}
+          onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+          onTouchStart={start} onTouchMove={move} onTouchEnd={end}
+        />
+        <button onClick={clear} style={{position:"absolute",top:6,right:6,background:"rgba(255,255,255,0.9)",border:"1px solid var(--border)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--warm)"}}>
+          Borrar
+        </button>
+        {!signed && <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:"#ccc",fontSize:13,pointerEvents:"none",textAlign:"center"}}>✍️ Firmar aquí</div>}
+      </div>
+    </div>
+  );
+}
+
+function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
+  const [step, setStep] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [ownerSig, setOwnerSig] = useState(null);
+  const [tenantSig, setTenantSig] = useState(null);
+  const monthNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const now = new Date();
+
+  const [form, setForm] = useState({
+    name:"", phone:"", email:"", dni:"", address:"", rent:"", docType:"recibo", ipc:"no",
+    signDay:String(now.getDate()), signMonth:monthNames[now.getMonth()], signYear:String(now.getFullYear()),
+    startDay:String(now.getDate()), startMonth:monthNames[now.getMonth()], startYear:String(now.getFullYear()),
+    endDay:String(now.getDate()), endMonth:monthNames[now.getMonth()], endYear:String(now.getFullYear()+1),
+  });
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const toISO=(day,month,year)=>{const idx=monthNames.indexOf((month||"").toLowerCase());if(idx<0)return"";return`${year}-${String(idx+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;};
+
+  const handleSave = async() => {
+    setSaving(true);
+    const contractData={
+      unit, tenantName:form.name, tenantDni:form.dni, tenantAddress:form.address,
+      signDay:form.signDay, signMonth:form.signMonth, signYear:parseInt(form.signYear),
+      startDay:form.startDay, startMonth:form.startMonth, startYear:parseInt(form.startYear),
+      endDay:form.endDay, endMonth:form.endMonth, endYear:parseInt(form.endYear),
+      rent:form.rent, phone:form.phone, email:form.email,
+      ownerSig, tenantSig,
+    };
+    await onSave({
+      name:form.name, unit, phone:form.phone, email:form.email,
+      dni:form.dni, address:form.address, rent:parseFloat(form.rent)||0,
+      docType:form.docType, building, ipc:form.ipc,
+      contractStart:toISO(form.startDay,form.startMonth,form.startYear),
+      contractEnd:toISO(form.endDay,form.endMonth,form.endYear),
+      _contractData:contractData,
+    });
+    setSaving(false);
+    setStep(4);
+  };
+
+  const bar=(active,total)=>(
+    <div style={{display:"flex",gap:6,marginBottom:18}}>
+      {Array.from({length:total},(_,i)=>(
+        <div key={i} style={{flex:1,height:4,borderRadius:4,background:i<active?"var(--terra)":"var(--border)"}}/>
+      ))}
+    </div>
+  );
+
+  return(
+    <div className="modal" style={{maxWidth:520}}>
+
+      {/* PASO 1: Datos inquilino */}
+      {step===1&&<>
+        <div className="modal-hd">
+          <h3>🏚️ Nuevo inquilino — {unit}</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        {bar(1,4)}
+        <div style={{background:"var(--cream)",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13}}>
+          📍 <strong>{building}</strong> · {unit}
+        </div>
+        <div className="fg"><label>Nombre completo</label>
+          <input value={form.name} onChange={e=>set("name",e.target.value)} placeholder="Nombre del inquilino"/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>DNI / NIE</label>
+            <input value={form.dni} onChange={e=>set("dni",e.target.value)} placeholder="12345678A"/>
+          </div>
+          <div className="fg"><label>Teléfono</label>
+            <input value={form.phone} onChange={e=>set("phone",e.target.value)}/>
+          </div>
+        </div>
+        <div className="fg"><label>Email</label>
+          <input type="email" value={form.email} onChange={e=>set("email",e.target.value)}/>
+        </div>
+        <div className="fg"><label>Domicilio del inquilino</label>
+          <input value={form.address} onChange={e=>set("address",e.target.value)} placeholder="Calle, nº, ciudad"/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Alquiler €/mes</label>
+            <input type="number" value={form.rent} onChange={e=>set("rent",e.target.value)} placeholder="0"/>
+          </div>
+          <div className="fg"><label>Tipo documento</label>
+            <select value={form.docType} onChange={e=>set("docType",e.target.value)}>
+              <option value="recibo">🧾 Recibo</option>
+              <option value="factura">🧾 Factura</option>
+            </select>
+          </div>
+        </div>
+        <div className="fg">
+          <label>📈 Subida IPC anual (1,5%)</label>
+          <select value={form.ipc} onChange={e=>set("ipc",e.target.value)}>
+            <option value="no">No — sin revisión anual</option>
+            <option value="si">Sí — recordarme cada año en el mes de firma</option>
+          </select>
+          {form.ipc==="si"&&<div style={{fontSize:11,color:"#4A9B6F",marginTop:4}}>✅ Cada año en el mes de firma recibirás una notificación para aprobar la subida.</div>}
+        </div>
+        <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.name||!form.rent}>
+          Siguiente → Contrato ›
+        </button>
+      </>}
+
+      {/* PASO 2: Fechas contrato */}
+      {step===2&&<>
+        <div className="modal-hd">
+          <h3>📝 Datos del contrato</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        {bar(2,4)}
+        <div style={{fontWeight:600,fontSize:12,marginBottom:8,color:"var(--warm)",textTransform:"uppercase",letterSpacing:".7px"}}>Fecha de firma</div>
+        <div style={{display:"flex",gap:6,marginBottom:14}}>
+          <input style={{width:50,padding:"8px 10px",border:"1.5px solid var(--border)",borderRadius:8,fontSize:13}} value={form.signDay} onChange={e=>set("signDay",e.target.value)} placeholder="día"/>
+          <input style={{flex:1,padding:"8px 10px",border:"1.5px solid var(--border)",borderRadius:8,fontSize:13}} value={form.signMonth} onChange={e=>set("signMonth",e.target.value)} placeholder="mes"/>
+          <input style={{width:64,padding:"8px 10px",border:"1.5px solid var(--border)",borderRadius:8,fontSize:13}} value={form.signYear} onChange={e=>set("signYear",e.target.value)}/>
+        </div>
+        <div className="gr2">
+          <div className="fg"><label>Inicio contrato</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.startDay} onChange={e=>set("startDay",e.target.value)} placeholder="día"/>
+              <input value={form.startMonth} onChange={e=>set("startMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.startYear} onChange={e=>set("startYear",e.target.value)}/>
+            </div>
+          </div>
+          <div className="fg"><label>Fin contrato</label>
+            <div style={{display:"flex",gap:4}}>
+              <input style={{width:44}} value={form.endDay} onChange={e=>set("endDay",e.target.value)} placeholder="día"/>
+              <input value={form.endMonth} onChange={e=>set("endMonth",e.target.value)} placeholder="mes"/>
+              <input style={{width:52}} value={form.endYear} onChange={e=>set("endYear",e.target.value)}/>
+            </div>
+          </div>
+        </div>
+        <div style={{background:"var(--cream)",borderRadius:12,padding:14,fontSize:13,marginBottom:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.name}</strong></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nave</span><strong>{building}</strong></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Periodo</span><strong>{form.startDay}/{form.startMonth}/{form.startYear} → {form.endDay}/{form.endMonth}/{form.endYear}</strong></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}><span style={{color:"var(--warm)"}}>Renta</span><strong>{form.rent} €/mes</strong></div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-o" onClick={()=>setStep(1)}>‹ Volver</button>
+          <button className="btn btn-p" style={{flex:1}} onClick={()=>setStep(3)}>
+            Siguiente → Firmas ›
+          </button>
+        </div>
+      </>}
+
+      {/* PASO 3: Firmas táctiles */}
+      {step===3&&<>
+        <div className="modal-hd">
+          <h3>✍️ Firmas</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        {bar(3,4)}
+        <p style={{fontSize:13,color:"var(--warm)",marginBottom:16}}>Firmar con el dedo en cada recuadro.</p>
+        <SignaturePad label="Firma del arrendador — Berta Suau" onSign={setOwnerSig} signed={!!ownerSig}/>
+        <SignaturePad label={`Firma del arrendatario — ${form.name}`} onSign={setTenantSig} signed={!!tenantSig}/>
+        <div style={{display:"flex",gap:8,marginTop:8}}>
+          <button className="btn btn-o" onClick={()=>setStep(2)}>‹ Volver</button>
+          <button className="btn btn-p" style={{flex:1}} onClick={handleSave} disabled={!ownerSig||!tenantSig||saving}>
+            {saving?"⏳ Guardando...":"✅ Guardar y generar contrato"}
+          </button>
+        </div>
+        {(!ownerSig||!tenantSig)&&<p style={{fontSize:11,color:"var(--warm)",textAlign:"center",marginTop:8}}>Las dos firmas son obligatorias</p>}
+      </>}
+
+      {/* PASO 4: Confirmación */}
+      {step===4&&<>
+        <div className="modal-hd">
+          <h3>✅ ¡Contrato firmado!</h3>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        {bar(4,4)}
+        <div style={{textAlign:"center",padding:"16px 0"}}>
+          <div style={{fontSize:56,marginBottom:12}}>🎉</div>
+          <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:6}}>Trastero asignado</h3>
+          <p style={{color:"var(--warm)",fontSize:13,marginBottom:18}}>El contrato se ha descargado con las firmas incluidas.</p>
+          <div style={{background:"var(--cream)",borderRadius:12,padding:14,marginBottom:18,textAlign:"left",fontSize:13}}>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Trastero</span><strong>{unit}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid var(--border)"}}><span style={{color:"var(--warm)"}}>Nave</span><strong>{building}</strong></div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}><span style={{color:"var(--warm)"}}>Inquilino</span><strong>{form.name}</strong></div>
+          </div>
+          <button className="btn btn-p btn-full" onClick={onClose}>Cerrar</button>
+        </div>
+      </>}
+    </div>
+  );
+}
+
 
 function StatusBadge({status,t}){
   const map={"Pendiente":{bg:"#FDECEA",color:"#D94F3D",label:t?.pending||"Pendiente"},"En revisión":{bg:"#FDF6E3",color:"#D4A853",label:t?.inReview||"En revisión"},"Resuelto":{bg:"#E6F4ED",color:"#4A9B6F",label:t?.resolved||"Resuelto"}};
