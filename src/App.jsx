@@ -727,6 +727,28 @@ export default function App() {
     showToast("🗑️ Contrato eliminado");
   }
 
+  // EXTRACTOS
+  const [extractos,setExtractos]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    const q=query(collection(db,"extractos",user.uid,"files"),orderBy("createdAt","desc"));
+    return onSnapshot(q,snap=>setExtractos(snap.docs.map(d=>({id:d.id,...d.data()}))));
+  },[user,isOwner]);
+  async function saveExtracto(fileName, movimientos){
+    const ref=await addDoc(collection(db,"extractos",user.uid,"files"),{
+      fileName, movimientos, createdAt:serverTimestamp()
+    });
+    return ref.id;
+  }
+  async function updateExtracto(extractoId, movimientos){
+    await updateDoc(doc(db,"extractos",user.uid,"files",extractoId),{movimientos});
+  }
+  async function deleteExtracto(extractoId){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"extractos",user.uid,"files",extractoId));
+    showToast("🗑️ Extracto eliminado");
+  }
+
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(null),3000);};
   const persist=async(ref,data)=>{setSaving(true);await updateDoc(ref,data);setSaving(false);};
 
@@ -877,7 +899,7 @@ export default function App() {
     if(isOwner){
       if(page==="dashboard")return<Dashboard t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})}/>;
       if(page==="tenants")return<Tenants t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
-      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onAddCostDirect={addCost} onDeleteCost={deleteCost}/>;
+      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onAddCostDirect={addCost} onDeleteCost={deleteCost} extractos={extractos} onSaveExtracto={saveExtracto} onUpdateExtracto={updateExtracto} onDeleteExtracto={deleteExtracto}/>;
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
@@ -1362,7 +1384,7 @@ function Tenants({t,tenants,onSelect,onNew,onEdit,buildings=[]}){
 }
 
 function Finances(props){
-  const {t,tenants,onToggle,onAddCost,onAddCostDirect,onDeleteCost}=props;
+  const {t,tenants,onToggle,onAddCost,onAddCostDirect,onDeleteCost,extractos,onSaveExtracto,onUpdateExtracto,onDeleteExtracto}=props;
   const now=new Date();
   const startYear=2024; const endYear=startYear+15;
   const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -1601,188 +1623,178 @@ function Finances(props){
         </div>
       )}
 
-      {tab==="extracto"&&<ExtractoTab tenants={tenants} onToggle={onToggle} onAddCost={onAddCostDirect||onAddCost} monthsOfYear={monthsOfYear} selYear={selYear}/>}
+      {tab==="extracto"&&<ExtractoTab tenants={tenants} onToggle={onToggle} onAddCost={onAddCostDirect||onAddCost} monthsOfYear={monthsOfYear} selYear={selYear} extractos={extractos||[]} onSaveExtracto={onSaveExtracto} onUpdateExtracto={onUpdateExtracto} onDeleteExtracto={onDeleteExtracto}/>}
     </div>
   );
 }
 
 // ─── EXTRACTO BANCARIO ─────────────────────────────────────────────────────
-function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear}) {
-  const [file, setFile] = useState(null);
+function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onSaveExtracto, onUpdateExtracto, onDeleteExtracto}) {
   const [loading, setLoading] = useState(false);
-  const [movimientos, setMovimientos] = useState([]);
-  const [applied, setApplied] = useState({});
-  const [gastoPanel, setGastoPanel] = useState(null); // index of open gasto panel
+  const [selExtracto, setSelExtracto] = useState(null); // {id, fileName, movimientos}
+  const [gastoPanel, setGastoPanel] = useState(null);
   const [gastoForm, setGastoForm] = useState({tenantId:"general", tipo:"suministro", nota:""});
   const [asignarPanel, setAsignarPanel] = useState(null);
   const [asignarTenantId, setAsignarTenantId] = useState("");
 
-  const parseExtracto = (text) => {
-    const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>5);
-    const movs = [];
-    const sep = (text.match(/;/g)||[]).length > (text.match(/,/g)||[]).length ? ";" : text.includes("\t") ? "\t" : ",";
+  // When extractos load, auto-select the most recent one if none selected
+  const {useEffect:ue} = {useEffect};
+  useEffect(()=>{
+    if(extractos.length>0 && !selExtracto){
+      setSelExtracto(extractos[0]);
+    }
+    if(selExtracto){
+      // Keep selExtracto in sync with Firestore updates
+      const updated = extractos.find(e=>e.id===selExtracto.id);
+      if(updated) setSelExtracto(updated);
+    }
+  },[extractos]);
 
-    // Detect CaixaBank format: Concepte;Data;Import;Saldo
-    const headerLine = lines[0]||"";
-    const isCaixa = /concepte|import|saldo/i.test(headerLine);
+  const mNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const fechaToMonth=(fecha)=>{
+    const p=fecha.split(/[\/\-]/);
+    if(p.length<3) return mNames[new Date().getMonth()]+" "+new Date().getFullYear();
+    const m=parseInt(p[1])-1;
+    const y=p[2].length===2?"20"+p[2]:p[2];
+    return `${mNames[m]||mNames[0]} ${y}`;
+  };
 
-    for(let li=0; li<lines.length; li++){
-      const line = lines[li];
-      // Skip header
-      if(li===0 && /concepte|fecha|date|concepto|importe|saldo/i.test(line)) continue;
-
-      const parts = line.split(sep).map(p=>p.replace(/"/g,"").trim());
-      if(parts.length < 3) continue;
-
-      let fecha="", descripcion="", importe=null;
-
-      if(isCaixa && parts.length>=3){
-        // Format: Concepte;Data;Import;Saldo
-        // Import looks like: +130,00EUR or -3.257,25EUR
-        descripcion = parts[0];
-        fecha = parts[1];
-        const importRaw = parts[2]
-          .replace(/EUR/gi,"")          // remove EUR
-          .replace(/\./g,"")            // remove thousand dots: 3.257 → 3257
-          .replace(",",".")             // decimal comma → dot: 130,00 → 130.00
-          .trim();
-        importe = parseFloat(importRaw);
-      } else {
-        // Generic fallback
-        const dateRe = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/;
-        const dateMatch = line.match(dateRe);
-        if(!dateMatch) continue;
-        fecha = dateMatch[1];
-        descripcion = parts[0];
-        for(let i=parts.length-1; i>=0; i--){
-          const raw = parts[i].replace(/EUR/gi,"").replace(/\s/g,"").replace(/\.(?=\d{3})/g,"").replace(",",".");
-          const n = parseFloat(raw);
-          if(!isNaN(n) && Math.abs(n)>0.01 && Math.abs(n)<999999){ importe=n; break; }
+  const parseExtracto=(text,currentTenants)=>{
+    const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>5);
+    const movs=[];
+    const sep=(text.match(/;/g)||[]).length>(text.match(/,/g)||[]).length?";":(text.includes("\t")?"\t":",");
+    const isCaixa=/concepte|import|saldo/i.test(lines[0]||"");
+    for(let li=0;li<lines.length;li++){
+      const line=lines[li];
+      if(li===0&&/concepte|fecha|date|concepto|importe|saldo/i.test(line))continue;
+      const parts=line.split(sep).map(p=>p.replace(/"/g,"").trim());
+      if(parts.length<3)continue;
+      let fecha="",descripcion="",importe=null;
+      if(isCaixa&&parts.length>=3){
+        descripcion=parts[0]; fecha=parts[1];
+        const raw=parts[2].replace(/EUR/gi,"").replace(/\./g,"").replace(",",".").trim();
+        importe=parseFloat(raw);
+      }else{
+        const dm=line.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
+        if(!dm)continue;
+        fecha=dm[1]; descripcion=parts[0];
+        for(let i=parts.length-1;i>=0;i--){
+          const r=parts[i].replace(/EUR/gi,"").replace(/\s/g,"").replace(/\.(?=\d{3})/g,"").replace(",",".");
+          const n=parseFloat(r);
+          if(!isNaN(n)&&Math.abs(n)>0.01&&Math.abs(n)<999999){importe=n;break;}
         }
       }
-
-      if(importe===null||isNaN(importe)||importe===0) continue;
-
-      const tipo = importe>0 ? "ingreso" : "gasto";
-      const abs = Math.abs(importe);
-
-      // Match tenant by rent amount (±2€) or name words
-      let tenantMatch = null;
-      for(const ten of tenants){
-        if(Math.abs(ten.rent - abs)<=2){ tenantMatch=ten.name; break; }
-        const words = ten.name.toLowerCase().split(" ").filter(w=>w.length>3);
-        if(words.some(w=>line.toLowerCase().includes(w))){ tenantMatch=ten.name; break; }
+      if(importe===null||isNaN(importe)||importe===0)continue;
+      const tipo=importe>0?"ingreso":"gasto";
+      const abs=Math.abs(importe);
+      let tenantMatch=null;
+      for(const ten of currentTenants){
+        if(Math.abs(ten.rent-abs)<=2){tenantMatch=ten.name;break;}
+        const words=ten.name.toLowerCase().split(" ").filter(w=>w.length>3);
+        if(words.some(w=>line.toLowerCase().includes(w))){tenantMatch=ten.name;break;}
       }
-
-      // Classify concept
       let concepto="otro";
-      const ll = line.toLowerCase();
-      if(tenantMatch && tipo==="ingreso") concepto="alquiler";
-      else if(/alquiler|lloguer|arrendament|renta/.test(ll)) concepto="alquiler";
-      else if(/llum|luz|electricidad|endesa|iberdrola|naturgy|energia|gas|aigua|agua|suministro/.test(ll)) concepto="suministro";
-      else if(/reparaci|manten|obra|fontanero|electricista/.test(ll)) concepto="mantenimiento";
-
-      movs.push({fecha, descripcion:descripcion.slice(0,70), importe:abs, tipo, tenantMatch, concepto});
+      const ll=line.toLowerCase();
+      if(tenantMatch&&tipo==="ingreso")concepto="alquiler";
+      else if(/alquiler|lloguer|arrendament|renta/.test(ll))concepto="alquiler";
+      else if(/llum|luz|electricidad|endesa|iberdrola|naturgy|energia|gas|aigua|agua|suministro/.test(ll))concepto="suministro";
+      else if(/reparaci|manten|obra|fontanero|electricista/.test(ll))concepto="mantenimiento";
+      movs.push({fecha,descripcion:descripcion.slice(0,70),importe:abs,tipo,tenantMatch,concepto,estado:null});
     }
     return movs;
   };
 
-  const handleFile = async(e) => {
-    const f = e.target.files[0];
-    if(!f) return;
-    setFile(f); setMovimientos([]); setApplied({}); setLoading(true);
+  const handleFile=async(e)=>{
+    const f=e.target.files[0]; if(!f)return;
+    setLoading(true);
     try{
-      const text = await new Promise((res,rej)=>{
-        const r=new FileReader();
-        r.onload=ev=>res(ev.target.result);
-        r.onerror=rej;
-        r.readAsText(f,"latin1");
-      });
-      setMovimientos(parseExtracto(text));
-    }catch(e){ alert("Error: "+e.message); }
+      const text=await new Promise((res,rej)=>{const r=new FileReader();r.onload=ev=>res(ev.target.result);r.onerror=rej;r.readAsText(f,"latin1");});
+      const movs=parseExtracto(text,tenants);
+      if(movs.length===0){alert("⚠️ No se detectaron movimientos.");setLoading(false);return;}
+      const id=await onSaveExtracto(f.name, movs);
+      // selExtracto will update via useEffect when Firestore fires
+    }catch(e){alert("Error: "+e.message);}
     setLoading(false);
   };
 
-  const applyAll = async() => {
-    let count=0;
-    for(let i=0;i<movimientos.length;i++){
-      const mov=movimientos[i];
-      if(mov.tipo==="ingreso"&&mov.tenantMatch&&!applied[i]){
-        const ten=tenants.find(t=>t.name===mov.tenantMatch);
-        const movMonth=fechaToMonth(mov.fecha);
-        if(ten&&!((ten.payments||{})[movMonth]?.paid)){ await onToggle(ten.id,movMonth); count++; }
-      }
-    }
-    const a={};
-    movimientos.forEach((_,i)=>{if(movimientos[i].tipo==="ingreso"&&movimientos[i].tenantMatch)a[i]=true;});
-    setApplied(a);
-    alert(`✅ ${count} pagos marcados como cobrados`);
+  const updateMov=async(movIdx, patch)=>{
+    if(!selExtracto)return;
+    const movs=selExtracto.movimientos.map((m,i)=>i===movIdx?{...m,...patch}:m);
+    await onUpdateExtracto(selExtracto.id, movs);
   };
 
-  const saveGasto = async(mov, idx) => {
-    const movMonth = fechaToMonth(mov.fecha);
-    const cost = {
-      icon: gastoForm.tipo==="suministro"?"💡":gastoForm.tipo==="mantenimiento"?"🔧":"📋",
-      name: gastoForm.nota || mov.descripcion,
-      month: movMonth,
-      amount: mov.importe,
-      tipo: gastoForm.tipo,
-      nota: gastoForm.nota || mov.descripcion,
+  const saveGasto=async(mov,idx)=>{
+    const movMonth=fechaToMonth(mov.fecha);
+    const cost={
+      icon:gastoForm.tipo==="suministro"?"💡":gastoForm.tipo==="mantenimiento"?"🔧":gastoForm.tipo==="inversion"?"🏗️":"📋",
+      name:gastoForm.nota||mov.descripcion, month:movMonth, amount:mov.importe,
+      tipo:gastoForm.tipo, nota:gastoForm.nota||mov.descripcion,
     };
-    if(gastoForm.tenantId === "general"){
-      // Save to first tenant as general cost (workaround — uses prop-level tenant)
-      const firstTen = tenants[0];
-      if(firstTen) await onAddCost(firstTen.id, {...cost, name:"[General] "+cost.name});
-    } else {
-      await onAddCost(gastoForm.tenantId, cost);
+    if(gastoForm.tenantId==="general"){
+      const firstTen=tenants[0];
+      if(firstTen)await onAddCost(firstTen.id,{...cost,name:"[General] "+cost.name});
+    }else{
+      await onAddCost(gastoForm.tenantId,cost);
     }
-    setApplied(a=>({...a,[idx]:"gasto"}));
+    await updateMov(idx,{estado:"gasto_guardado"});
     setGastoPanel(null);
   };
 
-  // Convert DD/MM/YYYY date to month string like "Enero 2026"
-  const fechaToMonth = (fecha) => {
-    const mNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-    const parts = fecha.split(/[\/\-]/);
-    if(parts.length<3) return selMonth;
-    const m = parseInt(parts[1])-1;
-    const y = parts[2].length===2?"20"+parts[2]:parts[2];
-    return `${mNames[m]||mNames[0]} ${y}`;
-  };
-
+  const movimientos=selExtracto?.movimientos||[];
   const totalIngresos=movimientos.filter(m=>m.tipo==="ingreso").reduce((s,m)=>s+m.importe,0);
   const totalGastos=movimientos.filter(m=>m.tipo==="gasto").reduce((s,m)=>s+m.importe,0);
-  const identificados=movimientos.filter(m=>m.tenantMatch).length;
+  const identificados=movimientos.filter(m=>m.tenantMatch||m.estado==="cobrado").length;
+  const pendientes=movimientos.filter(m=>m.tipo==="ingreso"&&!m.estado).length;
   const cColors={alquiler:"#4A9B6F",suministro:"#4F46E5",mantenimiento:"#D4A853",otro:"#8C7B6E"};
   const cLabels={alquiler:"🏠 Alquiler",suministro:"💡 Suministro",mantenimiento:"🔧 Mantenimiento",otro:"📋 Otro"};
 
   return(
     <div>
+      {/* Header: subir nuevo + lista extractos guardados */}
       <div className="card" style={{marginBottom:16}}>
-        <div className="card-title">🏦 Extracto bancario</div>
+        <div className="card-title">🏦 Extractos bancarios</div>
         <p style={{fontSize:13,color:"var(--warm)",marginBottom:14}}>
-          Sube el extracto en <strong>CSV o TXT</strong>. La app detecta movimientos y los cruza con tus inquilinos. El mes se asigna automáticamente según la fecha de cada transferencia.
+          Sube el extracto de CaixaBank en <strong>CSV</strong>. Se guarda automáticamente y puedes volver a él cuando quieras para asignar pagos pendientes.
         </p>
         <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
           <label style={{display:"flex",alignItems:"center",gap:8,padding:"10px 18px",background:"var(--terra)",color:"white",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:600}}>
-            📎 {file?file.name:"Seleccionar CSV / TXT"}
+            📎 Subir nuevo extracto
             <input type="file" accept=".csv,.txt" onChange={handleFile} style={{display:"none"}}/>
           </label>
-          {loading&&<span style={{fontSize:13,color:"var(--warm)"}}>⏳ Leyendo...</span>}
+          {loading&&<span style={{fontSize:13,color:"var(--warm)"}}>⏳ Procesando...</span>}
         </div>
-        {file&&movimientos.length===0&&!loading&&(
-          <p style={{marginTop:10,fontSize:12,color:"#D94F3D"}}>⚠️ No se detectaron movimientos. Comprueba que el archivo tiene fechas (DD/MM/YYYY) e importes numéricos.</p>
+        {/* Lista extractos guardados */}
+        {extractos.length>0&&(
+          <div style={{marginTop:14,display:"flex",flexDirection:"column",gap:6}}>
+            <div style={{fontSize:12,color:"var(--warm)",fontWeight:600,textTransform:"uppercase",marginBottom:2}}>Extractos guardados</div>
+            {extractos.map(ex=>{
+              const pend=( ex.movimientos||[]).filter(m=>m.tipo==="ingreso"&&!m.estado).length;
+              const isSelected=selExtracto?.id===ex.id;
+              return(
+                <div key={ex.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:`2px solid ${isSelected?"var(--terra)":"var(--border)"}`,background:isSelected?"#FDF6EE":"var(--surface)",cursor:"pointer"}} onClick={()=>setSelExtracto(ex)}>
+                  <div style={{fontSize:18}}>📄</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:600,fontSize:13}}>{ex.fileName}</div>
+                    <div style={{fontSize:11,color:"var(--warm)"}}>{(ex.movimientos||[]).length} movimientos · {ex.createdAt?.toDate?ex.createdAt.toDate().toLocaleDateString("es-ES"):""}</div>
+                  </div>
+                  {pend>0&&<span style={{fontSize:11,background:"#FEF3C7",color:"#92400E",padding:"3px 8px",borderRadius:20,fontWeight:600}}>⏳ {pend} pendientes</span>}
+                  <button className="btn btn-sm" style={{color:"var(--red)",border:"1px solid var(--red)",background:"transparent",padding:"4px 8px"}} onClick={e=>{e.stopPropagation();if(confirm("¿Eliminar este extracto?"))onDeleteExtracto(ex.id);}}>🗑️</button>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
 
-      {movimientos.length>0&&(
+      {/* Movimientos del extracto seleccionado */}
+      {selExtracto&&movimientos.length>0&&(
         <>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:12,marginBottom:16}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12,marginBottom:16}}>
             {[
               {v:totalIngresos.toFixed(2)+"€",l:"💰 Ingresos",c:"#4A9B6F"},
               {v:totalGastos.toFixed(2)+"€",l:"📤 Gastos",c:"#D94F3D"},
               {v:(totalIngresos-totalGastos).toFixed(2)+"€",l:"📊 Balance",c:"var(--terra)"},
-              {v:identificados+"/"+movimientos.filter(m=>m.tipo==="ingreso").length,l:"🏠 Identificados",c:"#4F46E5"},
+              {v:pendientes,l:"⏳ Pendientes",c:pendientes>0?"#F59E0B":"#4A9B6F"},
             ].map((item,i)=>(
               <div key={i} className="card" style={{padding:14,textAlign:"center",border:`2px solid ${item.c}`}}>
                 <div style={{fontSize:20,fontWeight:700,color:item.c}}>{item.v}</div>
@@ -1792,18 +1804,20 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear}) {
           </div>
 
           <div className="card">
-            <div className="card-title">📋 Movimientos ({movimientos.length})</div>
+            <div className="card-title">📋 {selExtracto.fileName} · {movimientos.length} movimientos</div>
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {movimientos.map((mov,i)=>{
                 const isIng=mov.tipo==="ingreso";
                 const ten=mov.tenantMatch?tenants.find(t=>t.name===mov.tenantMatch):null;
-                const movMonth = fechaToMonth(mov.fecha);
+                const movMonth=fechaToMonth(mov.fecha);
                 const alreadyPaid=ten&&((ten.payments||{})[movMonth]?.paid);
-                const wasApplied=applied[i];
-                const gastoGuardado=wasApplied==="gasto";
+                const cobrado=mov.estado==="cobrado"||alreadyPaid;
+                const gastoGuardado=mov.estado==="gasto_guardado";
+                const openGasto=gastoPanel===i;
+                const openAsignar=asignarPanel===i;
                 return(
                   <div key={i}>
-                    <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:(gastoPanel===i||asignarPanel===i)?"10px 10px 0 0":"10px",border:`1.5px solid ${isIng?"#C8E6C9":"#FFCDD2"}`,background:isIng?"#F9FFF9":"#FFF8F8",flexWrap:"wrap"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:(openGasto||openAsignar)?"10px 10px 0 0":"10px",border:`1.5px solid ${isIng?"#C8E6C9":"#FFCDD2"}`,background:isIng?"#F9FFF9":"#FFF8F8",flexWrap:"wrap",opacity:cobrado||gastoGuardado?0.7:1}}>
                       <div style={{fontSize:18}}>{isIng?"💚":"🔴"}</div>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontWeight:600,fontSize:13,marginBottom:3}}>{mov.descripcion}</div>
@@ -1812,38 +1826,38 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear}) {
                           <span style={{fontSize:11,background:"#E3F0FF",color:"#1A5FB4",padding:"2px 8px",borderRadius:20,fontWeight:600}}>📅 {movMonth}</span>
                           <span style={{fontSize:11,background:cColors[mov.concepto],color:"white",padding:"2px 8px",borderRadius:20}}>{cLabels[mov.concepto]}</span>
                           {mov.tenantMatch&&<span style={{fontSize:11,background:"#E8F5E9",color:"#2E7D32",padding:"2px 8px",borderRadius:20,fontWeight:600}}>🏠 {mov.tenantMatch}</span>}
-                          {(alreadyPaid||wasApplied===true)&&<span style={{fontSize:11,color:"#4A9B6F",fontWeight:600}}>✅ Cobrado {movMonth}</span>}
+                          {cobrado&&<span style={{fontSize:11,color:"#4A9B6F",fontWeight:600}}>✅ Cobrado {movMonth}</span>}
                           {gastoGuardado&&<span style={{fontSize:11,color:"#4F46E5",fontWeight:600}}>✅ Gasto guardado</span>}
+                          {isIng&&!cobrado&&!mov.tenantMatch&&<span style={{fontSize:11,background:"#FEF3C7",color:"#92400E",padding:"2px 8px",borderRadius:20,fontWeight:600}}>⏳ Sin asignar</span>}
                         </div>
                       </div>
                       <div style={{fontWeight:700,fontSize:15,color:isIng?"#4A9B6F":"#D94F3D",flexShrink:0}}>{isIng?"+":"-"}{mov.importe.toFixed(2)}€</div>
-                      {/* Ingreso identificado → marcar cobrado directo */}
-                      {isIng&&ten&&!alreadyPaid&&wasApplied!==true&&(
+                      {/* Ingreso identificado → marcar cobrado */}
+                      {isIng&&ten&&!cobrado&&(
                         <button className="btn btn-s btn-sm" onClick={async()=>{
-                          await onToggle(ten.id, movMonth);
-                          setApplied(a=>({...a,[i]:true}));
-                        }}>✅ Marcar cobrado</button>
+                          await onToggle(ten.id,movMonth);
+                          await updateMov(i,{estado:"cobrado"});
+                        }}>✅ Cobrado</button>
                       )}
-                      {/* Ingreso NO identificado → asignar manualmente */}
-                      {isIng&&!ten&&wasApplied!==true&&(
-                        <button className="btn btn-sm" style={{background:"#F59E0B",color:"white"}}
-                          onClick={()=>{setAsignarPanel(asignarPanel===i?null:i);setAsignarTenantId(tenants[0]?.id||"");setGastoPanel(null);}}>
+                      {/* Ingreso NO identificado → asignar */}
+                      {isIng&&!cobrado&&(
+                        <button className="btn btn-sm" style={{background:"#F59E0B",color:"white"}} onClick={()=>{setAsignarPanel(openAsignar?null:i);setAsignarTenantId(tenants[0]?.id||"");setGastoPanel(null);}}>
                           🔍 Asignar
                         </button>
                       )}
+                      {/* Gasto → guardar */}
                       {!isIng&&!gastoGuardado&&(
-                        <button className="btn btn-sm" style={{background:"#4F46E5",color:"white"}}
-                          onClick={()=>{setGastoPanel(gastoPanel===i?null:i);setGastoForm({tenantId:"general",tipo:mov.concepto==="otro"?"suministro":mov.concepto,nota:mov.descripcion});setAsignarPanel(null);}}>
-                          💾 Guardar gasto
+                        <button className="btn btn-sm" style={{background:"#4F46E5",color:"white"}} onClick={()=>{setGastoPanel(openGasto?null:i);setGastoForm({tenantId:"general",tipo:mov.concepto==="otro"?"suministro":mov.concepto,nota:mov.descripcion});setAsignarPanel(null);}}>
+                          💾 Guardar
                         </button>
                       )}
                     </div>
-                    {/* Panel asignar ingreso manualmente */}
-                    {isIng&&asignarPanel===i&&(
+                    {/* Panel asignar ingreso */}
+                    {isIng&&openAsignar&&(
                       <div style={{border:"1.5px solid #FDE68A",borderTop:"none",borderRadius:"0 0 10px 10px",background:"#FFFBEB",padding:"12px 14px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
                         <div style={{fontSize:13,color:"#92400E",fontWeight:600,width:"100%"}}>🔍 ¿De qué inquilino es esta transferencia de {mov.importe.toFixed(2)}€?</div>
-                        <div className="fg" style={{flex:1,minWidth:180,marginBottom:0}}>
-                          <label style={{fontSize:11}}>Inquilino</label>
+                        <div style={{flex:1,minWidth:180}}>
+                          <label style={{fontSize:11,display:"block",marginBottom:3}}>Inquilino</label>
                           <select value={asignarTenantId} onChange={e=>setAsignarTenantId(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}>
                             {tenants.map(t=><option key={t.id} value={t.id}>🏠 {t.name} · {t.unit} · {t.rent}€</option>)}
                           </select>
@@ -1851,26 +1865,27 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear}) {
                         <div style={{display:"flex",gap:6}}>
                           <button className="btn btn-o btn-sm" onClick={()=>setAsignarPanel(null)}>Cancelar</button>
                           <button className="btn btn-sm" style={{background:"#4A9B6F",color:"white"}} onClick={async()=>{
-                            if(!asignarTenantId) return;
-                            await onToggle(asignarTenantId, movMonth);
-                            setApplied(a=>({...a,[i]:true}));
+                            if(!asignarTenantId)return;
+                            const ten2=tenants.find(t=>t.id===asignarTenantId);
+                            await onToggle(asignarTenantId,movMonth);
+                            await updateMov(i,{estado:"cobrado",tenantMatch:ten2?.name||""});
                             setAsignarPanel(null);
                           }}>✅ Confirmar cobrado</button>
                         </div>
                       </div>
                     )}
-                    {/* Inline gasto panel */}
-                    {!isIng&&gastoPanel===i&&(
+                    {/* Panel guardar gasto */}
+                    {!isIng&&openGasto&&(
                       <div style={{border:"1.5px solid #FFCDD2",borderTop:"none",borderRadius:"0 0 10px 10px",background:"#FFF0F0",padding:"12px 14px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
-                        <div className="fg" style={{flex:1,minWidth:140,marginBottom:0}}>
-                          <label style={{fontSize:11}}>Asignar a</label>
+                        <div style={{flex:1,minWidth:140}}>
+                          <label style={{fontSize:11,display:"block",marginBottom:3}}>Asignar a</label>
                           <select value={gastoForm.tenantId} onChange={e=>setGastoForm(f=>({...f,tenantId:e.target.value}))} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}>
                             <option value="general">🏢 Gasto general propiedad</option>
                             {tenants.map(t=><option key={t.id} value={t.id}>🏠 {t.name} · {t.unit}</option>)}
                           </select>
                         </div>
-                        <div className="fg" style={{flex:1,minWidth:130,marginBottom:0}}>
-                          <label style={{fontSize:11}}>Tipo</label>
+                        <div style={{flex:1,minWidth:130}}>
+                          <label style={{fontSize:11,display:"block",marginBottom:3}}>Tipo</label>
                           <select value={gastoForm.tipo} onChange={e=>setGastoForm(f=>({...f,tipo:e.target.value}))} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}>
                             <option value="suministro">💡 Suministro</option>
                             <option value="mantenimiento">🔧 Mantenimiento</option>
@@ -1878,11 +1893,11 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear}) {
                             <option value="otro">📋 Otro</option>
                           </select>
                         </div>
-                        <div className="fg" style={{flex:2,minWidth:160,marginBottom:0}}>
-                          <label style={{fontSize:11}}>Nota</label>
+                        <div style={{flex:2,minWidth:160}}>
+                          <label style={{fontSize:11,display:"block",marginBottom:3}}>Nota</label>
                           <input value={gastoForm.nota} onChange={e=>setGastoForm(f=>({...f,nota:e.target.value}))} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}/>
                         </div>
-                        <div style={{display:"flex",gap:6,marginBottom:0}}>
+                        <div style={{display:"flex",gap:6}}>
                           <button className="btn btn-o btn-sm" onClick={()=>setGastoPanel(null)}>Cancelar</button>
                           <button className="btn btn-sm" style={{background:"#4F46E5",color:"white"}} onClick={()=>saveGasto(mov,i)}>💾 Guardar</button>
                         </div>
@@ -1894,6 +1909,13 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear}) {
             </div>
           </div>
         </>
+      )}
+      {extractos.length===0&&!loading&&(
+        <div className="card" style={{textAlign:"center",padding:40,color:"var(--warm)"}}>
+          <div style={{fontSize:40,marginBottom:12}}>🏦</div>
+          <div style={{fontWeight:600,marginBottom:6}}>Sube tu primer extracto</div>
+          <div style={{fontSize:13}}>Cada extracto que subas se guardará aquí para que puedas asignar los pagos cuando quieras.</div>
+        </div>
       )}
     </div>
   );
