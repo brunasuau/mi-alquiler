@@ -708,13 +708,27 @@ export default function App() {
     });
   },[user,isOwner]);
   async function addTrastero({unit,building}){
-    await addDoc(collection(db,"trasteros",user.uid,"list"),{unit,building,createdAt:serverTimestamp()});
+    await addDoc(collection(db,"trasteros",user.uid,"list"),{unit,building,tenantIds:[],createdAt:serverTimestamp()});
     showToast("✅ Trastero añadido");
   }
   async function deleteTrastero(id){
     const {deleteDoc}=await import("firebase/firestore");
     await deleteDoc(doc(db,"trasteros",user.uid,"list",id));
     showToast("🗑️ Trastero eliminado");
+  }
+  async function assignTrastero(trasteroId, tenantId){
+    const tr=trasteros.find(t=>t.id===trasteroId);
+    if(!tr)return;
+    const ids=[...(tr.tenantIds||[])];
+    if(!ids.includes(tenantId)) ids.push(tenantId);
+    await updateDoc(doc(db,"trasteros",user.uid,"list",trasteroId),{tenantIds:ids});
+  }
+  async function unassignTrastero(trasteroId, tenantId){
+    const tr=trasteros.find(t=>t.id===trasteroId);
+    if(!tr)return;
+    const ids=(tr.tenantIds||[]).filter(id=>id!==tenantId);
+    await updateDoc(doc(db,"trasteros",user.uid,"list",trasteroId),{tenantIds:ids});
+    showToast("✅ Inquilino desasignado del trastero");
   }
 
   async function saveContract(contractInfo){
@@ -725,6 +739,28 @@ export default function App() {
     const {deleteDoc} = await import("firebase/firestore");
     await deleteDoc(doc(db,"contracts",user.uid,"files",contractId));
     showToast("🗑️ Contrato eliminado");
+  }
+
+  // GRUPOS DE PAGO (ej. FATIR)
+  const [grupos,setGrupos]=useState([]);
+  useEffect(()=>{
+    if(!user||!isOwner)return;
+    return onSnapshot(collection(db,"grupos",user.uid,"list"),snap=>
+      setGrupos(snap.docs.map(d=>({id:d.id,...d.data()}))));
+  },[user,isOwner]);
+  async function saveGrupo(nombre, tenantIds){
+    const existing=grupos.find(g=>g.nombre===nombre);
+    if(existing){
+      await updateDoc(doc(db,"grupos",user.uid,"list",existing.id),{tenantIds});
+    }else{
+      await addDoc(collection(db,"grupos",user.uid,"list"),{nombre,tenantIds,createdAt:serverTimestamp()});
+    }
+    showToast("✅ Grupo guardado");
+  }
+  async function deleteGrupo(id){
+    const {deleteDoc}=await import("firebase/firestore");
+    await deleteDoc(doc(db,"grupos",user.uid,"list",id));
+    showToast("🗑️ Grupo eliminado");
   }
 
   // EXTRACTOS
@@ -899,7 +935,7 @@ export default function App() {
     if(isOwner){
       if(page==="dashboard")return<Dashboard t={t} tenants={tenants} onSelect={id=>setModal({type:"profile",id})}/>;
       if(page==="tenants")return<Tenants t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onSelect={id=>setModal({type:"profile",id})} onNew={()=>setModal({type:"new-tenant"})} onEdit={id=>setModal({type:"edit-tenant",id})}/>;
-      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onAddCostDirect={addCost} onDeleteCost={deleteCost} extractos={extractos} onSaveExtracto={saveExtracto} onUpdateExtracto={updateExtracto} onDeleteExtracto={deleteExtracto}/>;
+      if(page==="finances")return<Finances t={t} tenants={tenants} buildings={currentProp?.buildings||[]} onToggle={togglePayment} onAddCost={()=>setModal({type:"add-cost"})} onAddCostDirect={addCost} onDeleteCost={deleteCost} extractos={extractos} onSaveExtracto={saveExtracto} onUpdateExtracto={updateExtracto} onDeleteExtracto={deleteExtracto} grupos={grupos} onSaveGrupo={saveGrupo} onDeleteGrupo={deleteGrupo}/>;
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
@@ -907,7 +943,7 @@ export default function App() {
       if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
       if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
       if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
-      if(page==="trasteros")return<TrasterosPage t={t} tenants={tenants} buildings={currentProp?.buildings||[]} trasteros={trasteros} onAddTrastero={addTrastero} onDeleteTrastero={deleteTrastero} onCreateTenant={async(data)=>{const id=await createTenant(data);if(id&&data._contractData){await saveContract({...data._contractData,year:data._contractData.signYear||new Date().getFullYear(),date:today(),tenantUid:id});generateContractDocx(data._contractData);}}}/>;
+      if(page==="trasteros")return<TrasterosPage t={t} tenants={tenants} buildings={currentProp?.buildings||[]} trasteros={trasteros} onAddTrastero={addTrastero} onDeleteTrastero={deleteTrastero} onAssignTrastero={assignTrastero} onUnassignTrastero={unassignTrastero} onCreateTenant={async(data)=>{const id=await createTenant(data);if(id){if(data._trasteroId)await assignTrastero(data._trasteroId,id);if(data._contractData){await saveContract({...data._contractData,year:data._contractData.signYear||new Date().getFullYear(),date:today(),tenantUid:id});generateContractDocx(data._contractData);}}}}/>;
     }else{
       if(page==="t-home")return<TenantHome t={t} profile={profile}/>;
       if(page==="t-costs")return<TenantCosts t={t} profile={profile}/>;
@@ -1384,7 +1420,7 @@ function Tenants({t,tenants,onSelect,onNew,onEdit,buildings=[]}){
 }
 
 function Finances(props){
-  const {t,tenants,onToggle,onAddCost,onAddCostDirect,onDeleteCost,extractos,onSaveExtracto,onUpdateExtracto,onDeleteExtracto}=props;
+  const {t,tenants,onToggle,onAddCost,onAddCostDirect,onDeleteCost,extractos,onSaveExtracto,onUpdateExtracto,onDeleteExtracto,grupos,onSaveGrupo,onDeleteGrupo}=props;
   const now=new Date();
   const startYear=2024; const endYear=startYear+15;
   const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -1623,19 +1659,23 @@ function Finances(props){
         </div>
       )}
 
-      {tab==="extracto"&&<ExtractoTab tenants={tenants} onToggle={onToggle} onAddCost={onAddCostDirect||onAddCost} monthsOfYear={monthsOfYear} selYear={selYear} extractos={extractos||[]} onSaveExtracto={onSaveExtracto} onUpdateExtracto={onUpdateExtracto} onDeleteExtracto={onDeleteExtracto}/>}
+      {tab==="extracto"&&<ExtractoTab tenants={tenants} onToggle={onToggle} onAddCost={onAddCostDirect||onAddCost} monthsOfYear={monthsOfYear} selYear={selYear} extractos={extractos||[]} onSaveExtracto={onSaveExtracto} onUpdateExtracto={onUpdateExtracto} onDeleteExtracto={onDeleteExtracto} grupos={grupos||[]} onSaveGrupo={onSaveGrupo} onDeleteGrupo={onDeleteGrupo}/>}
     </div>
   );
 }
 
 // ─── EXTRACTO BANCARIO ─────────────────────────────────────────────────────
-function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onSaveExtracto, onUpdateExtracto, onDeleteExtracto}) {
+function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onSaveExtracto, onUpdateExtracto, onDeleteExtracto, grupos, onSaveGrupo, onDeleteGrupo}) {
   const [loading, setLoading] = useState(false);
-  const [selExtracto, setSelExtracto] = useState(null); // {id, fileName, movimientos}
+  const [selExtracto, setSelExtracto] = useState(null);
   const [gastoPanel, setGastoPanel] = useState(null);
   const [gastoForm, setGastoForm] = useState({tenantId:"general", tipo:"suministro", nota:""});
   const [asignarPanel, setAsignarPanel] = useState(null);
   const [asignarTenantId, setAsignarTenantId] = useState("");
+  const [showGrupos, setShowGrupos] = useState(false);
+  const [editGrupo, setEditGrupo] = useState(null); // {nombre, tenantIds[]}
+  const [grupoNombre, setGrupoNombre] = useState("");
+  const [grupoTenants, setGrupoTenants] = useState([]);
 
   // When extractos load, auto-select the most recent one if none selected
   const {useEffect:ue} = {useEffect};
@@ -1709,7 +1749,7 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
     setLoading(true);
     try{
       const text=await new Promise((res,rej)=>{const r=new FileReader();r.onload=ev=>res(ev.target.result);r.onerror=rej;r.readAsText(f,"latin1");});
-      const movs=parseExtracto(text,tenants);
+      const movs=parseExtracto(text,tenants,grupos);
       if(movs.length===0){alert("⚠️ No se detectaron movimientos.");setLoading(false);return;}
       const id=await onSaveExtracto(f.name, movs);
       // selExtracto will update via useEffect when Firestore fires
@@ -1750,6 +1790,74 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
 
   return(
     <div>
+      {/* Grupos de pago */}
+      <div className="card" style={{marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:showGrupos?14:0}}>
+          <div className="card-title" style={{marginBottom:0}}>👥 Grupos de pago</div>
+          <button className="btn btn-o btn-sm" onClick={()=>setShowGrupos(v=>!v)}>{showGrupos?"▲ Ocultar":"▼ Ver grupos"}</button>
+        </div>
+        {showGrupos&&(
+          <div>
+            <p style={{fontSize:13,color:"var(--warm)",marginBottom:12}}>
+              Crea grupos para transferencias que agrupan varios inquilinos (ej. FATIR). Al asignar la transferencia, se marcará cobrado cada inquilino del grupo y se generará su recibo.
+            </p>
+            {/* Existing grupos */}
+            {grupos.map(g=>(
+              <div key={g.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:"1.5px solid var(--border)",background:"var(--surface)",marginBottom:8}}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600,fontSize:13}}>👥 {g.nombre}</div>
+                  <div style={{fontSize:11,color:"var(--warm)",marginTop:2}}>
+                    {(g.tenantIds||[]).map(id=>{const t=tenants.find(x=>x.id===id);return t?`${t.name} (${t.rent}€)`:null;}).filter(Boolean).join(" · ")}
+                  </div>
+                  <div style={{fontSize:11,color:"#4A9B6F",fontWeight:600,marginTop:2}}>
+                    Total: {(g.tenantIds||[]).reduce((s,id)=>{const t=tenants.find(x=>x.id===id);return s+(t?parseFloat(t.rent)||0:0);},0).toFixed(2)}€
+                  </div>
+                </div>
+                <button className="btn btn-o btn-sm" onClick={()=>{setEditGrupo(g);setGrupoNombre(g.nombre);setGrupoTenants(g.tenantIds||[]);}}>✏️ Editar</button>
+                <button className="btn btn-sm" style={{color:"var(--red)",border:"1px solid var(--red)",background:"transparent"}} onClick={()=>{if(confirm("¿Eliminar grupo "+g.nombre+"?"))onDeleteGrupo(g.id);}}>🗑️</button>
+              </div>
+            ))}
+            {/* Add/edit grupo form */}
+            {(editGrupo!==null||grupos.length===0)&&(
+              <div style={{border:"2px dashed var(--terra)",borderRadius:10,padding:14,marginTop:8}}>
+                <div style={{fontWeight:600,fontSize:13,marginBottom:10}}>{editGrupo?"✏️ Editar grupo":"➕ Nuevo grupo"}</div>
+                <div style={{marginBottom:10}}>
+                  <label style={{fontSize:11,display:"block",marginBottom:3}}>Nombre del grupo</label>
+                  <input value={grupoNombre} onChange={e=>setGrupoNombre(e.target.value)} placeholder="Ej: FATIR, Grupo A..." style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}/>
+                </div>
+                <div style={{marginBottom:10}}>
+                  <label style={{fontSize:11,display:"block",marginBottom:6}}>Inquilinos del grupo</label>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    {tenants.map(ten=>(
+                      <label key={ten.id} style={{display:"flex",alignItems:"center",gap:8,fontSize:13,cursor:"pointer",padding:"6px 8px",borderRadius:8,background:grupoTenants.includes(ten.id)?"#E8F5E9":"transparent"}}>
+                        <input type="checkbox" checked={grupoTenants.includes(ten.id)} onChange={e=>setGrupoTenants(prev=>e.target.checked?[...prev,ten.id]:prev.filter(id=>id!==ten.id))} style={{width:16,height:16}}/>
+                        <span style={{flex:1}}>{ten.name}</span>
+                        <span style={{fontSize:11,color:"var(--warm)"}}>{ten.unit} · {ten.rent}€</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                {grupoTenants.length>0&&(
+                  <div style={{fontSize:12,color:"#4A9B6F",fontWeight:600,marginBottom:10}}>
+                    Total grupo: {grupoTenants.reduce((s,id)=>{const t=tenants.find(x=>x.id===id);return s+(t?parseFloat(t.rent)||0:0);},0).toFixed(2)}€
+                  </div>
+                )}
+                <div style={{display:"flex",gap:8}}>
+                  <button className="btn btn-o btn-sm" onClick={()=>{setEditGrupo(null);setGrupoNombre("");setGrupoTenants([]);}}>Cancelar</button>
+                  <button className="btn btn-p btn-sm" disabled={!grupoNombre.trim()||grupoTenants.length===0} onClick={async()=>{
+                    await onSaveGrupo(grupoNombre.trim(), grupoTenants);
+                    setEditGrupo(null); setGrupoNombre(""); setGrupoTenants([]);
+                  }}>💾 Guardar grupo</button>
+                </div>
+              </div>
+            )}
+            {grupos.length>0&&editGrupo===null&&(
+              <button className="btn btn-o btn-sm" style={{marginTop:8}} onClick={()=>{setEditGrupo({});setGrupoNombre("");setGrupoTenants([]);}}>➕ Nuevo grupo</button>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Header: subir nuevo + lista extractos guardados */}
       <div className="card" style={{marginBottom:16}}>
         <div className="card-title">🏦 Extractos bancarios</div>
@@ -1768,7 +1876,7 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
           <div style={{marginTop:14,display:"flex",flexDirection:"column",gap:6}}>
             <div style={{fontSize:12,color:"var(--warm)",fontWeight:600,textTransform:"uppercase",marginBottom:2}}>Extractos guardados</div>
             {extractos.map(ex=>{
-              const pend=( ex.movimientos||[]).filter(m=>m.tipo==="ingreso"&&!m.estado).length;
+              const pend=(ex.movimientos||[]).filter(m=>m.tipo==="ingreso"&&!m.estado).length;
               const isSelected=selExtracto?.id===ex.id;
               return(
                 <div key={ex.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:`2px solid ${isSelected?"var(--terra)":"var(--border)"}`,background:isSelected?"#FDF6EE":"var(--surface)",cursor:"pointer"}} onClick={()=>setSelExtracto(ex)}>
@@ -1825,7 +1933,8 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
                           <span style={{fontSize:11,color:"var(--warm)"}}>{mov.fecha}</span>
                           <span style={{fontSize:11,background:"#E3F0FF",color:"#1A5FB4",padding:"2px 8px",borderRadius:20,fontWeight:600}}>📅 {movMonth}</span>
                           <span style={{fontSize:11,background:cColors[mov.concepto],color:"white",padding:"2px 8px",borderRadius:20}}>{cLabels[mov.concepto]}</span>
-                          {mov.tenantMatch&&<span style={{fontSize:11,background:"#E8F5E9",color:"#2E7D32",padding:"2px 8px",borderRadius:20,fontWeight:600}}>🏠 {mov.tenantMatch}</span>}
+                          {mov.tenantMatch&&!mov.tenantMatch.startsWith("Grupo:")&&<span style={{fontSize:11,background:"#E8F5E9",color:"#2E7D32",padding:"2px 8px",borderRadius:20,fontWeight:600}}>🏠 {mov.tenantMatch}</span>}
+                          {(mov.tenantMatch?.startsWith("Grupo:")||mov.grupoMatch)&&<span style={{fontSize:11,background:"#EEF2FF",color:"#4F46E5",padding:"2px 8px",borderRadius:20,fontWeight:600}}>👥 {mov.tenantMatch||("Grupo: "+mov.grupoMatch)}</span>}
                           {cobrado&&<span style={{fontSize:11,color:"#4A9B6F",fontWeight:600}}>✅ Cobrado {movMonth}</span>}
                           {gastoGuardado&&<span style={{fontSize:11,color:"#4F46E5",fontWeight:600}}>✅ Gasto guardado</span>}
                           {isIng&&!cobrado&&!mov.tenantMatch&&<span style={{fontSize:11,background:"#FEF3C7",color:"#92400E",padding:"2px 8px",borderRadius:20,fontWeight:600}}>⏳ Sin asignar</span>}
@@ -1855,19 +1964,44 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
                     {/* Panel asignar ingreso */}
                     {isIng&&openAsignar&&(
                       <div style={{border:"1.5px solid #FDE68A",borderTop:"none",borderRadius:"0 0 10px 10px",background:"#FFFBEB",padding:"12px 14px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
-                        <div style={{fontSize:13,color:"#92400E",fontWeight:600,width:"100%"}}>🔍 ¿De qué inquilino es esta transferencia de {mov.importe.toFixed(2)}€?</div>
+                        <div style={{fontSize:13,color:"#92400E",fontWeight:600,width:"100%"}}>🔍 ¿De quién es esta transferencia de {mov.importe.toFixed(2)}€?</div>
+                        {/* Grupo option */}
+                        {grupos.length>0&&(
+                          <div style={{width:"100%",marginBottom:6}}>
+                            <div style={{fontSize:11,color:"var(--warm)",marginBottom:6,fontWeight:600}}>👥 Asignar como grupo:</div>
+                            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                              {grupos.map(g=>{
+                                const total=( g.tenantIds||[]).reduce((s,id)=>{const t=tenants.find(x=>x.id===id);return s+(t?parseFloat(t.rent)||0:0);},0);
+                                return(
+                                  <button key={g.id} className="btn btn-sm" style={{background:"#4F46E5",color:"white"}} onClick={async()=>{
+                                    const movMonth=fechaToMonth(mov.fecha);
+                                    for(const tid of (g.tenantIds||[])){
+                                      await onToggle(tid, movMonth);
+                                    }
+                                    await updateMov(i,{estado:"cobrado",tenantMatch:"Grupo: "+g.nombre});
+                                    setAsignarPanel(null);
+                                  }}>
+                                    👥 {g.nombre} · {total.toFixed(2)}€
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                        {/* Individual tenant */}
                         <div style={{flex:1,minWidth:180}}>
-                          <label style={{fontSize:11,display:"block",marginBottom:3}}>Inquilino</label>
+                          <label style={{fontSize:11,display:"block",marginBottom:3}}>O asignar a un inquilino</label>
                           <select value={asignarTenantId} onChange={e=>setAsignarTenantId(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}>
+                            <option value="">— Selecciona —</option>
                             {tenants.map(t=><option key={t.id} value={t.id}>🏠 {t.name} · {t.unit} · {t.rent}€</option>)}
                           </select>
                         </div>
                         <div style={{display:"flex",gap:6}}>
                           <button className="btn btn-o btn-sm" onClick={()=>setAsignarPanel(null)}>Cancelar</button>
-                          <button className="btn btn-sm" style={{background:"#4A9B6F",color:"white"}} onClick={async()=>{
+                          <button className="btn btn-sm" style={{background:"#4A9B6F",color:"white"}} disabled={!asignarTenantId} onClick={async()=>{
                             if(!asignarTenantId)return;
                             const ten2=tenants.find(t=>t.id===asignarTenantId);
-                            await onToggle(asignarTenantId,movMonth);
+                            await onToggle(asignarTenantId,fechaToMonth(mov.fecha));
                             await updateMov(i,{estado:"cobrado",tenantMatch:ten2?.name||""});
                             setAsignarPanel(null);
                           }}>✅ Confirmar cobrado</button>
@@ -3236,7 +3370,7 @@ function NewReceiptModal({t,tenant,receipts,onClose,onSave}){
 }
 
 // ─── TRASTEROS PAGE ──────────────────────────────────────────────────
-function TrasterosPage({t, tenants, buildings, onCreateTenant, trasteros, onAddTrastero, onDeleteTrastero}) {
+function TrasterosPage({t, tenants, buildings, onCreateTenant, trasteros, onAddTrastero, onDeleteTrastero, onAssignTrastero, onUnassignTrastero}) {
   const [modal, setModal] = useState(null);
   const [newUnit, setNewUnit] = useState("");
   const [newBuilding, setNewBuilding] = useState("");
@@ -3262,8 +3396,16 @@ function TrasterosPage({t, tenants, buildings, onCreateTenant, trasteros, onAddT
   });
   const allGroups = [...naves,"Sin nave"].filter(b=>byBuilding[b]?.length>0);
 
-  const getTenant = (unit, building) => tenants.find(ten=>ten.unit===unit && ten.building===building);
-  const totalOcupados = trasteros.filter(tr=>getTenant(tr.unit,tr.building)).length;
+  // Support both old (unit+building match) and new (tenantIds array) models
+  const getTenants = (slot) => {
+    if(slot.tenantIds && slot.tenantIds.length>0){
+      return slot.tenantIds.map(id=>tenants.find(t=>t.id===id)).filter(Boolean);
+    }
+    // Legacy fallback
+    const legacy = tenants.find(ten=>ten.unit===slot.unit && ten.building===slot.building);
+    return legacy ? [legacy] : [];
+  };
+  const totalOcupados = trasteros.filter(tr=>getTenants(tr).length>0).length;
 
   return(
     <div>
@@ -3310,7 +3452,7 @@ function TrasterosPage({t, tenants, buildings, onCreateTenant, trasteros, onAddT
 
       {allGroups.map((building, bi) => {
         const slots = byBuilding[building]||[];
-        const ocupados = slots.filter(s=>getTenant(s.unit,s.building)).length;
+        const ocupados = slots.filter(s=>getTenants(s).length>0).length;
         const color = buildingColors[bi % buildingColors.length];
         return(
           <div key={building} style={{marginBottom:20,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
@@ -3324,35 +3466,36 @@ function TrasterosPage({t, tenants, buildings, onCreateTenant, trasteros, onAddT
                 <span style={{background:"rgba(255,255,255,0.2)",padding:"4px 12px",borderRadius:20}}>🟢 {slots.length-ocupados}</span>
               </div>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:10,padding:16,background:"var(--cream)"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10,padding:16,background:"var(--cream)"}}>
               {slots.map(slot => {
-                const tenant = getTenant(slot.unit, slot.building);
-                const occupied = !!tenant;
+                const slotTenants = getTenants(slot);
+                const occupied = slotTenants.length>0;
                 return(
                   <div key={slot.id} style={{position:"relative"}}>
-                    <div
-                      onClick={()=>{if(!occupied) setModal({building:slot.building, unit:slot.unit});}}
-                      style={{
-                        background:occupied?"#FFF0EE":"#F0FAF4",
-                        border:`2px solid ${occupied?"#D94F3D":"#4A9B6F"}`,
-                        borderRadius:12, padding:"12px 8px", textAlign:"center",
-                        cursor:occupied?"default":"pointer", transition:"all .2s"
-                      }}
-                      onMouseEnter={e=>{if(!occupied)e.currentTarget.style.transform="scale(1.04)";}}
-                      onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
-                    >
+                    <div style={{
+                      background:occupied?"#FFF0EE":"#F0FAF4",
+                      border:`2px solid ${occupied?"#D94F3D":"#4A9B6F"}`,
+                      borderRadius:12, padding:"12px 8px", textAlign:"center", transition:"all .2s"
+                    }}>
                       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:17,fontWeight:700,color:occupied?"#D94F3D":"#4A9B6F",marginBottom:2}}>{slot.unit}</div>
                       <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".4px",color:occupied?"#D94F3D":"#4A9B6F",marginBottom:4}}>
                         {occupied?"🔴 Ocupado":"🟢 Libre"}
                       </div>
-                      {occupied && (
-                        <div style={{fontSize:11,color:"#444",lineHeight:1.3}}>
-                          <div style={{fontWeight:600}}>{tenant.name}</div>
-                          <div style={{color:"var(--warm)",fontSize:10}}>{tenant.rent}€/mes</div>
-                          {tenant.contractEnd&&<div style={{color:"var(--warm)",fontSize:9,marginTop:1}}>hasta {tenant.contractEnd}</div>}
+                      {/* Show all tenants */}
+                      {slotTenants.map(ten=>(
+                        <div key={ten.id} style={{fontSize:11,color:"#444",lineHeight:1.4,marginBottom:4,background:"rgba(0,0,0,0.04)",borderRadius:6,padding:"4px 6px"}}>
+                          <div style={{fontWeight:600}}>{ten.name}</div>
+                          <div style={{color:"var(--warm)",fontSize:10}}>{ten.rent}€/mes</div>
+                          {ten.contractEnd&&<div style={{color:"var(--warm)",fontSize:9,marginTop:1}}>hasta {ten.contractEnd}</div>}
+                          <button onClick={()=>{if(confirm("¿Desasignar a "+ten.name+" de este trastero?"))onUnassignTrastero(slot.id,ten.id);}}
+                            style={{fontSize:9,color:"#D94F3D",border:"none",background:"none",cursor:"pointer",marginTop:2,padding:0}}>✕ Quitar</button>
                         </div>
-                      )}
-                      {!occupied && <div style={{fontSize:10,color:"#4A9B6F",marginTop:4}}>➕ Añadir inquilino</div>}
+                      ))}
+                      {/* Add tenant button — always visible */}
+                      <button onClick={()=>setModal({building:slot.building, unit:slot.unit, trasteroId:slot.id})}
+                        style={{marginTop:4,fontSize:10,color:occupied?"#D94F3D":"#4A9B6F",border:`1px solid ${occupied?"#D94F3D":"#4A9B6F"}`,background:"transparent",borderRadius:6,padding:"3px 8px",cursor:"pointer",width:"100%"}}>
+                        ➕ {occupied?"Añadir otro":"Añadir inquilino"}
+                      </button>
                     </div>
                     {!occupied && (
                       <button
@@ -3375,7 +3518,7 @@ function TrasterosPage({t, tenants, buildings, onCreateTenant, trasteros, onAddT
             <NuevoTrasteroModal
               t={t} building={modal.building} unit={modal.unit}
               onClose={()=>setModal(null)}
-              onSave={async(data)=>{await onCreateTenant(data);setModal(null);}}
+              onSave={async(data)=>{await onCreateTenant({...data,_trasteroId:modal.trasteroId});setModal(null);}}
             />
           </div>
         </div>
