@@ -361,7 +361,6 @@ function IpcBanner({a, persist, db, showToast, setModal}) {
       </div>
     );
   }
-  }
 
   return(
     <div className="alert-banner" style={{alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
