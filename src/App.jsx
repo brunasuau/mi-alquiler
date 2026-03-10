@@ -285,6 +285,134 @@ function generateContractDocx(data) {
   return filename;
 }
 
+// ─── IPC BANNER ────────────────────────────────────────────────────────────
+function IpcBanner({a, persist, db, showToast, setModal}) {
+  const [ipcData, setIpcData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const mNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+  useEffect(()=>{
+    if(a.type!=="ipc") return;
+    setLoading(true); setFailed(false);
+    fetch("https://servicios.ine.es/wstempus/js/ES/DATOS_SERIE/IPC251852?nult=3&tip=M")
+      .then(r=>r.json())
+      .then(data=>{
+        const vals=data?.Data;
+        if(vals&&vals.length>0){
+          const last=vals[vals.length-1];
+          const pct=last.Valor;
+          const fecha=last.Fecha?new Date(last.Fecha):new Date();
+          setIpcData({pct, label:`IPC general ${mNames[fecha.getMonth()]} ${fecha.getFullYear()}`});
+        } else { setFailed(true); }
+      })
+      .catch(()=>setFailed(true))
+      .finally(()=>setLoading(false));
+  },[a.type, a.tenant?.id]);
+
+  const rent = parseFloat(a.tenant?.rent)||0;
+  const newRent = ipcData ? parseFloat((rent*(1+ipcData.pct/100)).toFixed(2)) : null;
+
+  if(a.type==="ipc"){
+    return(
+      <div className="alert-banner" style={{flexDirection:"column",gap:10}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:12,flex:1}}>
+          <div className="al-icon">📈</div>
+          <div style={{flex:1}}>
+            <div className="al-title">Revisión IPC · {a.tenant.name} · {a.tenant.unit}</div>
+            <div className="al-sub">
+              {a.years} año/s desde la firma ·{" "}
+              {loading && "⏳ Consultando INE..."}
+              {!loading && ipcData && <>{ipcData.label}: <strong>{ipcData.pct}%</strong> · {rent}€/mes → <strong>{newRent}€/mes</strong> (+{(newRent-rent).toFixed(2)}€)</>}
+              {!loading && failed && <span style={{color:"#D94F3D"}}>⚠️ No se ha podido obtener el dato del INE. Consúltalo manualmente antes de aplicar la subida.</span>}
+            </div>
+            {!loading && ipcData && (
+              <a href="https://www.ine.es/dyngs/IPC/es/index.htm?cid=1436" target="_blank" rel="noreferrer"
+                style={{fontSize:11,color:"#4F46E5",display:"inline-block",marginTop:4}}>
+                🔗 Verificar en INE.es
+              </a>
+            )}
+          </div>
+        </div>
+
+        {/* Paso de confirmación */}
+        {!confirming && !loading && (
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {ipcData && (
+              <button className="btn btn-s btn-sm" onClick={()=>setConfirming(true)}>
+                📈 Aplicar subida del {ipcData.pct}%
+              </button>
+            )}
+            {failed && (
+              <span style={{fontSize:12,color:"#8C7B6E",fontStyle:"italic"}}>Introduce el % manualmente cuando tengas el dato del INE.</span>
+            )}
+            <button className="btn btn-o btn-sm" onClick={async()=>{
+              await persist(doc(db,"users",a.tenant.id),{lastIpcYear:new Date().getFullYear()});
+              showToast("⏭️ Revisión IPC pospuesta hasta el año que viene");
+            }}>❌ No subir este año</button>
+          </div>
+        )}
+
+        {/* Confirmación explícita */}
+        {confirming && ipcData && (
+          <div style={{background:"#FFF9C4",border:"1.5px solid #F59E0B",borderRadius:10,padding:"12px 14px"}}>
+            <div style={{fontSize:13,fontWeight:600,marginBottom:8,color:"#92400E"}}>
+              ¿Confirmas subir la renta de {a.tenant.name}?
+            </div>
+            <div style={{fontSize:13,marginBottom:10}}>
+              <strong>{rent}€/mes</strong> → <strong>{newRent}€/mes</strong>{" "}
+              (+{(newRent-rent).toFixed(2)}€ · {ipcData.pct}% según {ipcData.label})
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-o btn-sm" onClick={()=>setConfirming(false)}>Cancelar</button>
+              <button className="btn btn-sm" style={{background:"#4A9B6F",color:"white"}} onClick={async()=>{
+                await persist(doc(db,"users",a.tenant.id),{rent:newRent,lastIpcYear:new Date().getFullYear()});
+                showToast(`✅ Renta actualizada a ${newRent}€ (+${ipcData.pct}%)`);
+                setConfirming(false);
+              }}>✅ Sí, aplicar subida</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return(
+    <div className="alert-banner" style={{alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+      <div style={{display:"flex",alignItems:"flex-start",gap:12,flex:1}}>
+        <div className="al-icon">
+          {a.type==="expired"?"🔴":a.type==="expiring"?"⚠️":"📝"}
+        </div>
+        <div>
+          <div className="al-title">
+            {a.type==="signed_today"&&`Contrato firmado hoy · ${a.tenant.name}`}
+            {a.type==="expiring"&&`Contrato próximo a vencer · ${a.tenant.name}`}
+            {a.type==="expired"&&`Contrato expirado · ${a.tenant.name}`}
+          </div>
+          <div className="al-sub">
+            {a.type==="signed_today"&&`Firmado hoy ${a.tenant.contractStart}`}
+            {a.type==="expiring"&&`Vence el ${a.tenant.contractEnd} · Quedan ${a.daysLeft} días`}
+            {a.type==="expired"&&`Venció el ${a.tenant.contractEnd} · ${a.tenant.unit}`}
+          </div>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:8,flexShrink:0}}>
+        {a.type==="expiring"&&<button className="btn btn-s btn-sm" onClick={()=>setModal({type:"renovar",tenant:a.tenant})}>🔄 Renovar</button>}
+        {a.type==="expired"&&<>
+          <button className="btn btn-s btn-sm" onClick={()=>setModal({type:"renovar",tenant:a.tenant})}>🔄 Renovar</button>
+          <button className="btn btn-sm" style={{background:"#D94F3D",color:"white"}} onClick={async()=>{
+            if(!window.confirm(`¿Eliminar a ${a.tenant.name} y liberar el trastero?`))return;
+            const {deleteDoc}=await import("firebase/firestore");
+            await deleteDoc(doc(db,"users",a.tenant.id));
+            showToast("🗑️ Inquilino eliminado · Trastero libre");
+          }}>🗑️ Eliminar</button>
+        </>}
+      </div>
+    </div>
+  );
+}
+
 function checkIPC(tenants) {
   const now=new Date(); const alerts=[];
   tenants.forEach(ten=>{
@@ -299,15 +427,15 @@ function checkIPC(tenants) {
       else if(daysLeft<=30) alerts.push({tenant:ten,daysLeft,type:"expiring"});
     }
 
-    // IPC: mismo mes y año de aniversario, si tiene ipc activado
+    // IPC: avisar 2 meses después del mes de firma, cada año
+    // Ej: firma enero → avisa en marzo de cada año siguiente
     if(ten.ipc==="si"){
+      const signMonth=start.getMonth(); // 0=enero
+      const ipcMonth=(signMonth+2)%12;  // 2 meses después
       const years=now.getFullYear()-start.getFullYear();
-      if(years>=1 && now.getMonth()===start.getMonth()){
-        // Solo mostrar si no se ha subido ya este año
-        const lastIpcYear=ten.lastIpcYear||0;
-        if(lastIpcYear < now.getFullYear()){
-          alerts.push({tenant:ten,years,type:"ipc"});
-        }
+      const lastIpcYear=ten.lastIpcYear||0;
+      if(years>=1 && now.getMonth()===ipcMonth && lastIpcYear<now.getFullYear()){
+        alerts.push({tenant:ten,years,type:"ipc",signMonth});
       }
     }
 
@@ -1112,52 +1240,8 @@ export default function App() {
           {!sidebarOpen&&<button className="hamburger-btn" onClick={e=>{e.stopPropagation();setSidebarOpen(true);}}>☰</button>}
           {saving&&<div className="saving">{t.saving}</div>}
           {isOwner&&anniversaries.length>0&&page==="dashboard"&&anniversaries.map((a,i)=>(
-            <div key={i} className="alert-banner" style={{alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
-              <div style={{display:"flex",alignItems:"flex-start",gap:12,flex:1}}>
-                <div className="al-icon">
-                  {a.type==="expired"?"🔴":a.type==="expiring"?"⚠️":a.type==="ipc"?"📈":"📝"}
-                </div>
-                <div>
-                  <div className="al-title">
-                    {a.type==="ipc"&&`Subida IPC pendiente · ${a.tenant.name}`}
-                    {a.type==="signed_today"&&`Contrato firmado hoy · ${a.tenant.name}`}
-                    {a.type==="expiring"&&`Contrato próximo a vencer · ${a.tenant.name}`}
-                    {a.type==="expired"&&`Contrato expirado · ${a.tenant.name}`}
-                  </div>
-                  <div className="al-sub">
-                    {a.type==="ipc"&&`${a.years} año/s desde la firma · Subida del 1,5% sobre ${a.tenant.rent}€ → ${(parseFloat(a.tenant.rent)*1.015).toFixed(2)}€`}
-                    {a.type==="signed_today"&&`Firmado hoy ${a.tenant.contractStart}`}
-                    {a.type==="expiring"&&`Vence el ${a.tenant.contractEnd} · Quedan ${a.daysLeft} días`}
-                    {a.type==="expired"&&`Venció el ${a.tenant.contractEnd} · ${a.tenant.unit}`}
-                  </div>
-                </div>
-              </div>
-              <div style={{display:"flex",gap:8,flexShrink:0}}>
-                {a.type==="ipc"&&<>
-                  <button className="btn btn-s btn-sm" onClick={async()=>{
-                    const newRent=parseFloat((parseFloat(a.tenant.rent)*1.015).toFixed(2));
-                    await persist(doc(db,"users",a.tenant.id),{rent:newRent,lastIpcYear:new Date().getFullYear()});
-                    showToast(`✅ Renta actualizada a ${newRent}€`);
-                  }}>✅ Subir 1,5%</button>
-                  <button className="btn btn-o btn-sm" onClick={async()=>{
-                    await persist(doc(db,"users",a.tenant.id),{lastIpcYear:new Date().getFullYear()});
-                    showToast("⏭️ IPC pospuesto hasta el año que viene");
-                  }}>❌ No subir</button>
-                </>}
-                {a.type==="expiring"&&<>
-                  <button className="btn btn-s btn-sm" onClick={()=>setModal({type:"renovar",tenant:a.tenant})}>🔄 Renovar</button>
-                </>}
-                {a.type==="expired"&&<>
-                  <button className="btn btn-s btn-sm" onClick={()=>setModal({type:"renovar",tenant:a.tenant})}>🔄 Renovar</button>
-                  <button className="btn btn-sm" style={{background:"#D94F3D",color:"white"}} onClick={async()=>{
-                    if(!window.confirm(`¿Eliminar a ${a.tenant.name} y liberar el trastero?`))return;
-                    const {deleteDoc}=await import("firebase/firestore");
-                    await deleteDoc(doc(db,"users",a.tenant.id));
-                    showToast("🗑️ Inquilino eliminado · Trastero libre");
-                  }}>🗑️ Eliminar</button>
-                </>}
-              </div>
-            </div>
+            <IpcBanner key={i} a={a} persist={persist} db={db} showToast={showToast} setModal={setModal}/>
+          ))}
           ))}
           {renderPage()}
         </main>
@@ -1672,6 +1756,7 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
   const [gastoForm, setGastoForm] = useState({tenantId:"general", tipo:"suministro", nota:""});
   const [asignarPanel, setAsignarPanel] = useState(null);
   const [asignarTenantId, setAsignarTenantId] = useState("");
+  const [asignarNota, setAsignarNota] = useState("");
   const [showGrupos, setShowGrupos] = useState(false);
   const [editGrupo, setEditGrupo] = useState(null); // {nombre, tenantIds[]}
   const [grupoNombre, setGrupoNombre] = useState("");
@@ -1921,11 +2006,12 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
                 const alreadyPaid=ten&&((ten.payments||{})[movMonth]?.paid);
                 const cobrado=mov.estado==="cobrado"||alreadyPaid;
                 const gastoGuardado=mov.estado==="gasto_guardado";
+                const revisado=mov.estado==="revisado";
                 const openGasto=gastoPanel===i;
                 const openAsignar=asignarPanel===i;
                 return(
                   <div key={i}>
-                    <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:(openGasto||openAsignar)?"10px 10px 0 0":"10px",border:`1.5px solid ${isIng?"#C8E6C9":"#FFCDD2"}`,background:isIng?"#F9FFF9":"#FFF8F8",flexWrap:"wrap",opacity:cobrado||gastoGuardado?0.7:1}}>
+                    <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:(openGasto||openAsignar)?"10px 10px 0 0":"10px",border:`1.5px solid ${isIng?"#C8E6C9":"#FFCDD2"}`,background:isIng?"#F9FFF9":"#FFF8F8",flexWrap:"wrap",opacity:cobrado||gastoGuardado||revisado?0.7:1}}>
                       <div style={{fontSize:18}}>{isIng?"💚":"🔴"}</div>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontWeight:600,fontSize:13,marginBottom:3}}>{mov.descripcion}</div>
@@ -1937,7 +2023,8 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
                           {(mov.tenantMatch?.startsWith("Grupo:")||mov.grupoMatch)&&<span style={{fontSize:11,background:"#EEF2FF",color:"#4F46E5",padding:"2px 8px",borderRadius:20,fontWeight:600}}>👥 {mov.tenantMatch||("Grupo: "+mov.grupoMatch)}</span>}
                           {cobrado&&<span style={{fontSize:11,color:"#4A9B6F",fontWeight:600}}>✅ Cobrado {movMonth}</span>}
                           {gastoGuardado&&<span style={{fontSize:11,color:"#4F46E5",fontWeight:600}}>✅ Gasto guardado</span>}
-                          {isIng&&!cobrado&&!mov.tenantMatch&&<span style={{fontSize:11,background:"#FEF3C7",color:"#92400E",padding:"2px 8px",borderRadius:20,fontWeight:600}}>⏳ Sin asignar</span>}
+                          {revisado&&<span style={{fontSize:11,color:"#8C7B6E",fontWeight:600}}>📋 Revisado{mov.nota?" · "+mov.nota:""}</span>}
+                          {isIng&&!cobrado&&!revisado&&!mov.tenantMatch&&<span style={{fontSize:11,background:"#FEF3C7",color:"#92400E",padding:"2px 8px",borderRadius:20,fontWeight:600}}>⏳ Sin asignar</span>}
                         </div>
                       </div>
                       <div style={{fontWeight:700,fontSize:15,color:isIng?"#4A9B6F":"#D94F3D",flexShrink:0}}>{isIng?"+":"-"}{mov.importe.toFixed(2)}€</div>
@@ -1949,7 +2036,7 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
                         }}>✅ Cobrado</button>
                       )}
                       {/* Ingreso NO identificado → asignar */}
-                      {isIng&&!cobrado&&(
+                      {isIng&&!cobrado&&!revisado&&(
                         <button className="btn btn-sm" style={{background:"#F59E0B",color:"white"}} onClick={()=>{setAsignarPanel(openAsignar?null:i);setAsignarTenantId(tenants[0]?.id||"");setGastoPanel(null);}}>
                           🔍 Asignar
                         </button>
@@ -1963,48 +2050,61 @@ function ExtractoTab({tenants, onToggle, onAddCost, monthsOfYear, extractos, onS
                     </div>
                     {/* Panel asignar ingreso */}
                     {isIng&&openAsignar&&(
-                      <div style={{border:"1.5px solid #FDE68A",borderTop:"none",borderRadius:"0 0 10px 10px",background:"#FFFBEB",padding:"12px 14px",display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
-                        <div style={{fontSize:13,color:"#92400E",fontWeight:600,width:"100%"}}>🔍 ¿De quién es esta transferencia de {mov.importe.toFixed(2)}€?</div>
-                        {/* Grupo option */}
+                      <div style={{border:"1.5px solid #FDE68A",borderTop:"none",borderRadius:"0 0 10px 10px",background:"#FFFBEB",padding:"12px 14px",display:"flex",flexDirection:"column",gap:10}}>
+                        <div style={{fontSize:13,color:"#92400E",fontWeight:600}}>🔍 ¿De quién es esta transferencia de {mov.importe.toFixed(2)}€?</div>
+                        {/* Grupos */}
                         {grupos.length>0&&(
-                          <div style={{width:"100%",marginBottom:6}}>
+                          <div>
                             <div style={{fontSize:11,color:"var(--warm)",marginBottom:6,fontWeight:600}}>👥 Asignar como grupo:</div>
                             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                               {grupos.map(g=>{
-                                const total=( g.tenantIds||[]).reduce((s,id)=>{const t=tenants.find(x=>x.id===id);return s+(t?parseFloat(t.rent)||0:0);},0);
+                                const total=(g.tenantIds||[]).reduce((s,id)=>{const t=tenants.find(x=>x.id===id);return s+(t?parseFloat(t.rent)||0:0);},0);
                                 return(
                                   <button key={g.id} className="btn btn-sm" style={{background:"#4F46E5",color:"white"}} onClick={async()=>{
-                                    const movMonth=fechaToMonth(mov.fecha);
-                                    for(const tid of (g.tenantIds||[])){
-                                      await onToggle(tid, movMonth);
-                                    }
+                                    for(const tid of (g.tenantIds||[])) await onToggle(tid,movMonth);
                                     await updateMov(i,{estado:"cobrado",tenantMatch:"Grupo: "+g.nombre});
                                     setAsignarPanel(null);
-                                  }}>
-                                    👥 {g.nombre} · {total.toFixed(2)}€
-                                  </button>
+                                  }}>👥 {g.nombre} · {total.toFixed(2)}€</button>
                                 );
                               })}
                             </div>
                           </div>
                         )}
-                        {/* Individual tenant */}
-                        <div style={{flex:1,minWidth:180}}>
-                          <label style={{fontSize:11,display:"block",marginBottom:3}}>O asignar a un inquilino</label>
-                          <select value={asignarTenantId} onChange={e=>setAsignarTenantId(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}>
-                            <option value="">— Selecciona —</option>
-                            {tenants.map(t=><option key={t.id} value={t.id}>🏠 {t.name} · {t.unit} · {t.rent}€</option>)}
-                          </select>
+                        {/* Inquilino individual */}
+                        <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+                          <div style={{flex:1,minWidth:180}}>
+                            <label style={{fontSize:11,display:"block",marginBottom:3}}>O asignar a un inquilino</label>
+                            <select value={asignarTenantId} onChange={e=>setAsignarTenantId(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13,width:"100%"}}>
+                              <option value="">— Selecciona —</option>
+                              {tenants.map(t=><option key={t.id} value={t.id}>🏠 {t.name} · {t.unit} · {t.rent}€</option>)}
+                            </select>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <button className="btn btn-o btn-sm" onClick={()=>setAsignarPanel(null)}>Cancelar</button>
+                            <button className="btn btn-sm" style={{background:"#4A9B6F",color:"white"}} disabled={!asignarTenantId} onClick={async()=>{
+                              if(!asignarTenantId)return;
+                              const ten2=tenants.find(t=>t.id===asignarTenantId);
+                              await onToggle(asignarTenantId,movMonth);
+                              await updateMov(i,{estado:"cobrado",tenantMatch:ten2?.name||""});
+                              setAsignarPanel(null);
+                            }}>✅ Confirmar cobrado</button>
+                          </div>
                         </div>
-                        <div style={{display:"flex",gap:6}}>
-                          <button className="btn btn-o btn-sm" onClick={()=>setAsignarPanel(null)}>Cancelar</button>
-                          <button className="btn btn-sm" style={{background:"#4A9B6F",color:"white"}} disabled={!asignarTenantId} onClick={async()=>{
-                            if(!asignarTenantId)return;
-                            const ten2=tenants.find(t=>t.id===asignarTenantId);
-                            await onToggle(asignarTenantId,fechaToMonth(mov.fecha));
-                            await updateMov(i,{estado:"cobrado",tenantMatch:ten2?.name||""});
-                            setAsignarPanel(null);
-                          }}>✅ Confirmar cobrado</button>
+                        {/* Marcar revisado sin inquilino */}
+                        <div style={{borderTop:"1px solid #FDE68A",paddingTop:10}}>
+                          <div style={{fontSize:11,color:"var(--warm)",marginBottom:6,fontWeight:600}}>📋 O marcar como revisado sin asignar a ningún inquilino</div>
+                          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                            <input
+                              value={asignarNota}
+                              onChange={e=>setAsignarNota(e.target.value)}
+                              placeholder="Nota opcional (ej: depósito, transferencia propia...)"
+                              style={{flex:1,minWidth:180,padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:13}}
+                            />
+                            <button className="btn btn-sm" style={{background:"#8C7B6E",color:"white"}} onClick={async()=>{
+                              await updateMov(i,{estado:"revisado",nota:asignarNota||"Sin nota"});
+                              setAsignarPanel(null); setAsignarNota("");
+                            }}>✅ Marcar revisado</button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -2408,7 +2508,8 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
     building:tenant?.building||"",docType:tenant?.docType||"recibo",
     payFreq:tenant?.payFreq||"mensual",fianza:tenant?.fianza||"no",
     fianzaAmount:tenant?.fianzaAmount||"",notes:tenant?.notes||"",
-    rentRecibo:tenant?.rentRecibo||"",rentFactura:tenant?.rentFactura||""
+    rentRecibo:tenant?.rentRecibo||"",rentFactura:tenant?.rentFactura||"",
+    ipc:tenant?.ipc||"no"
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(!tenant)return null;
@@ -2474,6 +2575,18 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
       <div className="fg">
         <label>📝 Notas</label>
         <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} rows={3} style={{width:"100%",padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,fontFamily:"inherit",fontSize:13,resize:"vertical"}}/>
+      </div>
+      <div className="fg">
+        <label>📈 Revisión IPC anual</label>
+        <select value={form.ipc} onChange={e=>set("ipc",e.target.value)}>
+          <option value="no">No — sin revisión anual</option>
+          <option value="si">Sí — avisarme cada año para revisar la subida</option>
+        </select>
+        {form.ipc==="si"&&(
+          <div style={{fontSize:11,color:"#4A9B6F",marginTop:4}}>
+            ✅ Recibirás un aviso 2 meses después del mes de firma para consultar el IPC del INE y decidir si subir la renta.
+          </div>
+        )}
       </div>
       <button className="btn btn-p btn-full" onClick={()=>onSave(tenant.id,form)}>💾 {t.save}</button>
     </div>
@@ -3684,7 +3797,7 @@ function NuevoTrasteroModal({t, building, unit, onClose, onSave}) {
             <option value="no">No — sin revisión anual</option>
             <option value="si">Sí — recordarme cada año en el mes de firma</option>
           </select>
-          {form.ipc==="si"&&<div style={{fontSize:11,color:"#4A9B6F",marginTop:4}}>✅ Cada año en el mes de firma recibirás una notificación para aprobar la subida.</div>}
+          {form.ipc==="si"&&<div style={{fontSize:11,color:"#4A9B6F",marginTop:4}}>✅ Recibirás un aviso 2 meses después del mes de firma cada año para revisar el IPC del INE y decidir si subir la renta.</div>}
         </div>
         <button className="btn btn-p btn-full" onClick={()=>setStep(2)} disabled={!form.name||!form.rent}>
           Siguiente → Contrato ›
