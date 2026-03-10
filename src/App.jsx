@@ -294,25 +294,59 @@ function IpcBanner({a, persist, db, showToast, setModal}) {
   const mNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
   useEffect(()=>{
-    if(a.type!=="ipc") return;
+    if(a.type!=="ipc"||!a.tenant?.contractStart) return;
     setLoading(true); setFailed(false);
-    fetch("https://servicios.ine.es/wstempus/js/ES/DATOS_SERIE/IPC251852?nult=3&tip=M")
+
+    // Calcular mes inicial (mes de firma) y mes final (1 año después)
+    // Ej: firma enero 2025 → mesInicial=enero2025, mesFinal=enero2026
+    const start = new Date(a.tenant.contractStart);
+    const mesInicialIdx = start.getMonth();   // 0=enero
+    const anyoInicial = start.getFullYear();
+    const mesFinalIdx = mesInicialIdx;
+    const anyoFinal = anyoInicial + a.years;  // 1 año después por cada aniversario
+
+    // Serie INE: IPC290749 = Índice general base 2021 (tabla 1 LAU)
+    // Fórmula: Renta actualizada = Renta inicial × ROUND(índice_final / índice_inicial, 3)
+    fetch("https://servicios.ine.es/wstempus/js/ES/DATOS_SERIE/IPC290749?nult=36&tip=M")
       .then(r=>r.json())
       .then(data=>{
         const vals=data?.Data;
-        if(vals&&vals.length>0){
-          const last=vals[vals.length-1];
-          const pct=last.Valor;
-          const fecha=last.Fecha?new Date(last.Fecha):new Date();
-          setIpcData({pct, label:`IPC general ${mNames[fecha.getMonth()]} ${fecha.getFullYear()}`});
-        } else { setFailed(true); }
+        if(!vals||vals.length===0){setFailed(true);return;}
+
+        const findIndice=(targetMonth, targetYear)=>{
+          return vals.find(v=>{
+            const d=new Date(v.Fecha);
+            return d.getMonth()===targetMonth && d.getFullYear()===targetYear;
+          });
+        };
+
+        const inicial = findIndice(mesInicialIdx, anyoInicial);
+        const final_  = findIndice(mesFinalIdx, anyoFinal);
+
+        if(!inicial||!final_){
+          setFailed(true); return;
+        }
+
+        // Cociente redondeado a 3 decimales (exactamente como indica el INE)
+        const cociente = Math.round((final_.Valor / inicial.Valor) * 1000) / 1000;
+        const pct = parseFloat(((cociente - 1)*100).toFixed(2));
+
+        setIpcData({
+          pct,
+          cociente,
+          indiceInicial: inicial.Valor,
+          indiceFinal: final_.Valor,
+          mesInicial: `${mNames[mesInicialIdx]} ${anyoInicial}`,
+          mesFinal: `${mNames[mesFinalIdx]} ${anyoFinal}`,
+        });
       })
       .catch(()=>setFailed(true))
       .finally(()=>setLoading(false));
   },[a.type, a.tenant?.id]);
 
   const rent = parseFloat(a.tenant?.rent)||0;
-  const newRent = ipcData ? parseFloat((rent*(1+ipcData.pct/100)).toFixed(2)) : null;
+  // Fórmula INE: renta × cociente redondeado a 3 decimales
+  const newRent = ipcData ? parseFloat((rent * ipcData.cociente).toFixed(2)) : null;
 
   if(a.type==="ipc"){
     return(
@@ -324,7 +358,12 @@ function IpcBanner({a, persist, db, showToast, setModal}) {
             <div className="al-sub">
               {a.years} año/s desde la firma ·{" "}
               {loading && "⏳ Consultando INE..."}
-              {!loading && ipcData && <>{ipcData.label}: <strong>{ipcData.pct}%</strong> · {rent}€/mes → <strong>{newRent}€/mes</strong> (+{(newRent-rent).toFixed(2)}€)</>}
+              {!loading && ipcData && <>
+                <strong>{ipcData.pct}%</strong> · {rent}€/mes → <strong>{newRent}€/mes</strong> (+{(newRent-rent).toFixed(2)}€)
+                <div style={{fontSize:11,color:"var(--warm)",marginTop:3}}>
+                  Fórmula INE: {rent}€ × ({ipcData.indiceFinal} ÷ {ipcData.indiceInicial}) · Índice {ipcData.mesInicial}: {ipcData.indiceInicial} → {ipcData.mesFinal}: {ipcData.indiceFinal}
+                </div>
+              </>}
               {!loading && failed && <span style={{color:"#D94F3D"}}>⚠️ No se ha podido obtener el dato del INE. Consúltalo manualmente antes de aplicar la subida.</span>}
             </div>
             {!loading && ipcData && (
@@ -362,7 +401,10 @@ function IpcBanner({a, persist, db, showToast, setModal}) {
             </div>
             <div style={{fontSize:13,marginBottom:10}}>
               <strong>{rent}€/mes</strong> → <strong>{newRent}€/mes</strong>{" "}
-              (+{(newRent-rent).toFixed(2)}€ · {ipcData.pct}% según {ipcData.label})
+              (+{(newRent-rent).toFixed(2)}€ · {ipcData.pct}%)<br/>
+              <span style={{fontSize:11,color:"var(--warm)"}}>
+                {rent}€ × ({ipcData.indiceFinal} ÷ {ipcData.indiceInicial}) · IPC {ipcData.mesInicial} → {ipcData.mesFinal}
+              </span>
             </div>
             <div style={{display:"flex",gap:8}}>
               <button className="btn btn-o btn-sm" onClick={()=>setConfirming(false)}>Cancelar</button>
