@@ -287,130 +287,72 @@ function generateContractDocx(data) {
 
 // ─── IPC BANNER ────────────────────────────────────────────────────────────
 function IpcBanner({a, persist, db, showToast, setModal}) {
-  const [ipcData, setIpcData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [pctInput, setPctInput] = useState("");
   const [confirming, setConfirming] = useState(false);
   const mNames=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
-  useEffect(()=>{
-    if(a.type!=="ipc"||!a.tenant?.contractStart) return;
-    setLoading(true); setFailed(false);
-
-    // Calcular mes inicial (mes de firma) y mes final (1 año después)
-    // Ej: firma enero 2025 → mesInicial=enero2025, mesFinal=enero2026
-    const start = new Date(a.tenant.contractStart);
-    const mesInicialIdx = start.getMonth();   // 0=enero
-    const anyoInicial = start.getFullYear();
-    const mesFinalIdx = mesInicialIdx;
-    const anyoFinal = anyoInicial + a.years;  // 1 año después por cada aniversario
-
-    // Serie INE: IPC290749 = Índice general base 2021 (tabla 1 LAU)
-    // Fórmula: Renta actualizada = Renta inicial × ROUND(índice_final / índice_inicial, 3)
-    fetch("https://servicios.ine.es/wstempus/js/ES/DATOS_SERIE/IPC290749?nult=36&tip=M")
-      .then(r=>r.json())
-      .then(data=>{
-        const vals=data?.Data;
-        if(!vals||vals.length===0){setFailed(true);return;}
-
-        const findIndice=(targetMonth, targetYear)=>{
-          return vals.find(v=>{
-            const d=new Date(v.Fecha);
-            return d.getMonth()===targetMonth && d.getFullYear()===targetYear;
-          });
-        };
-
-        const inicial = findIndice(mesInicialIdx, anyoInicial);
-        const final_  = findIndice(mesFinalIdx, anyoFinal);
-
-        if(!inicial||!final_){
-          setFailed(true); return;
-        }
-
-        // Cociente redondeado a 3 decimales (exactamente como indica el INE)
-        const cociente = Math.round((final_.Valor / inicial.Valor) * 1000) / 1000;
-        const pct = parseFloat(((cociente - 1)*100).toFixed(2));
-
-        setIpcData({
-          pct,
-          cociente,
-          indiceInicial: inicial.Valor,
-          indiceFinal: final_.Valor,
-          mesInicial: `${mNames[mesInicialIdx]} ${anyoInicial}`,
-          mesFinal: `${mNames[mesFinalIdx]} ${anyoFinal}`,
-        });
-      })
-      .catch(()=>setFailed(true))
-      .finally(()=>setLoading(false));
-  },[a.type, a.tenant?.id]);
+  const start = a.tenant?.contractStart ? new Date(a.tenant.contractStart) : null;
+  const mesInicialIdx = start ? start.getMonth() : 0;
+  const anyoInicial = start ? start.getFullYear() : "";
+  const anyoFinal = anyoInicial ? anyoInicial + a.years : "";
+  const mesNombre = mNames[mesInicialIdx];
 
   const rent = parseFloat(a.tenant?.rent)||0;
-  // Fórmula INE: renta × cociente redondeado a 3 decimales
-  const newRent = ipcData ? parseFloat((rent * ipcData.cociente).toFixed(2)) : null;
+  const pct = parseFloat(String(pctInput).replace(",","."));
+  const newRent = !isNaN(pct) && pct>0 ? parseFloat((rent*(1+pct/100)).toFixed(2)) : null;
+
+  const ineUrl = "https://www.ine.es/dyngs/IPC/es/index.htm?cid=1436";
 
   if(a.type==="ipc"){
     return(
-      <div className="alert-banner" style={{flexDirection:"column",gap:10}}>
-        <div style={{display:"flex",alignItems:"flex-start",gap:12,flex:1}}>
+      <div className="alert-banner" style={{flexDirection:"column",gap:12}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:12}}>
           <div className="al-icon">📈</div>
           <div style={{flex:1}}>
             <div className="al-title">Revisión IPC · {a.tenant.name} · {a.tenant.unit}</div>
-            <div className="al-sub">
-              {a.years} año/s desde la firma ·{" "}
-              {loading && "⏳ Consultando INE..."}
-              {!loading && ipcData && <>
-                <strong>{ipcData.pct}%</strong> · {rent}€/mes → <strong>{newRent}€/mes</strong> (+{(newRent-rent).toFixed(2)}€)
-                <div style={{fontSize:11,color:"var(--warm)",marginTop:3}}>
-                  Fórmula INE: {rent}€ × ({ipcData.indiceFinal} ÷ {ipcData.indiceInicial}) · Índice {ipcData.mesInicial}: {ipcData.indiceInicial} → {ipcData.mesFinal}: {ipcData.indiceFinal}
-                </div>
-              </>}
-              {!loading && failed && <span style={{color:"#D94F3D"}}>⚠️ No se ha podido obtener el dato del INE. Consúltalo manualmente antes de aplicar la subida.</span>}
+            <div className="al-sub">{a.years} año/s desde la firma · Consulta el IPC del INE e introduce el % de variación anual.</div>
+            <div style={{fontSize:12,background:"var(--cream)",borderRadius:8,padding:"8px 10px",marginTop:6,lineHeight:1.7}}>
+              <strong>Datos que necesitas en el INE:</strong><br/>
+              📅 Mes inicial: <strong>{mesNombre} {anyoInicial}</strong><br/>
+              📅 Mes final: <strong>{mesNombre} {anyoFinal}</strong><br/>
+              <a href={ineUrl} target="_blank" rel="noreferrer" style={{color:"#4F46E5",fontWeight:600}}>🔗 Abrir tabla IPC en INE.es →</a>
             </div>
-            {!loading && ipcData && (
-              <a href="https://www.ine.es/dyngs/IPC/es/index.htm?cid=1436" target="_blank" rel="noreferrer"
-                style={{fontSize:11,color:"#4F46E5",display:"inline-block",marginTop:4}}>
-                🔗 Verificar en INE.es
-              </a>
-            )}
           </div>
         </div>
 
-        {/* Paso de confirmación */}
-        {!confirming && !loading && (
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            {ipcData && (
-              <button className="btn btn-s btn-sm" onClick={()=>setConfirming(true)}>
-                📈 Aplicar subida del {ipcData.pct}%
-              </button>
-            )}
-            {failed && (
-              <span style={{fontSize:12,color:"#8C7B6E",fontStyle:"italic"}}>Introduce el % manualmente cuando tengas el dato del INE.</span>
-            )}
-            <button className="btn btn-o btn-sm" onClick={async()=>{
-              await persist(doc(db,"users",a.tenant.id),{lastIpcYear:new Date().getFullYear()});
-              showToast("⏭️ Revisión IPC pospuesta hasta el año que viene");
-            }}>❌ No subir este año</button>
+        {!confirming && (
+          <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap"}}>
+            <div>
+              <label style={{fontSize:11,display:"block",marginBottom:3,color:"var(--warm)"}}>% variación anual (del INE)</label>
+              <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                <input type="text" inputMode="decimal" value={pctInput} onChange={e=>setPctInput(e.target.value)}
+                  placeholder="ej: 2,3"
+                  style={{width:90,padding:"7px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:14,fontWeight:600}}/>
+                <span style={{fontSize:13}}>%</span>
+                {newRent&&<span style={{fontSize:13,color:"#4A9B6F",fontWeight:600}}>{rent}€ → {newRent}€ (+{(newRent-rent).toFixed(2)}€)</span>}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-s btn-sm" disabled={!newRent} onClick={()=>setConfirming(true)}>📈 Aplicar subida</button>
+              <button className="btn btn-o btn-sm" onClick={async()=>{
+                await persist(doc(db,"users",a.tenant.id),{lastIpcYear:new Date().getFullYear()});
+                showToast("⏭️ Revisión IPC pospuesta hasta el año que viene");
+              }}>❌ No subir este año</button>
+            </div>
           </div>
         )}
 
-        {/* Confirmación explícita */}
-        {confirming && ipcData && (
+        {confirming&&newRent&&(
           <div style={{background:"#FFF9C4",border:"1.5px solid #F59E0B",borderRadius:10,padding:"12px 14px"}}>
-            <div style={{fontSize:13,fontWeight:600,marginBottom:8,color:"#92400E"}}>
-              ¿Confirmas subir la renta de {a.tenant.name}?
-            </div>
+            <div style={{fontSize:13,fontWeight:600,marginBottom:6,color:"#92400E"}}>¿Confirmas subir la renta de {a.tenant.name}?</div>
             <div style={{fontSize:13,marginBottom:10}}>
-              <strong>{rent}€/mes</strong> → <strong>{newRent}€/mes</strong>{" "}
-              (+{(newRent-rent).toFixed(2)}€ · {ipcData.pct}%)<br/>
-              <span style={{fontSize:11,color:"var(--warm)"}}>
-                {rent}€ × ({ipcData.indiceFinal} ÷ {ipcData.indiceInicial}) · IPC {ipcData.mesInicial} → {ipcData.mesFinal}
-              </span>
+              <strong>{rent}€/mes</strong> → <strong>{newRent}€/mes</strong> (+{(newRent-rent).toFixed(2)}€ · {pct}% IPC {mesNombre} {anyoInicial}→{anyoFinal})
             </div>
             <div style={{display:"flex",gap:8}}>
               <button className="btn btn-o btn-sm" onClick={()=>setConfirming(false)}>Cancelar</button>
               <button className="btn btn-sm" style={{background:"#4A9B6F",color:"white"}} onClick={async()=>{
                 await persist(doc(db,"users",a.tenant.id),{rent:newRent,lastIpcYear:new Date().getFullYear()});
-                showToast(`✅ Renta actualizada a ${newRent}€ (+${ipcData.pct}%)`);
+                showToast(`✅ Renta actualizada a ${newRent}€ (+${pct}%)`);
                 setConfirming(false);
               }}>✅ Sí, aplicar subida</button>
             </div>
@@ -418,6 +360,7 @@ function IpcBanner({a, persist, db, showToast, setModal}) {
         )}
       </div>
     );
+  }
   }
 
   return(
