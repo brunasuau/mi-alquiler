@@ -10,6 +10,8 @@ import {
   onSnapshot, addDoc, orderBy, serverTimestamp, updateDoc
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 import { jsPDF } from "jspdf";
 
 const OWNER_EMAIL = "bertasuau@gmail.com";
@@ -57,61 +59,194 @@ function generateReceipt({ tenantName, unit, month, date }) {
   d.save(`Rebut_${tenantName.replace(/ /g,"_")}_${month.replace(/ /g,"_")}.pdf`);
 }
 
-function generateAnnualExcel(tenants, year) {
+async function generateAnnualExcel(tenants, year, upToMonthIndex) {
   const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-  const months=monthNames.map(m=>`${m} ${year}`);
-  const wb=XLSX.utils.book_new();
+  const cutIdx=(upToMonthIndex!==undefined&&upToMonthIndex!==null)?upToMonthIndex:11;
+  const months=monthNames.slice(0,cutIdx+1).map(m=>`${m} ${year}`);
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "MiAlquiler";
+  wb.created = new Date();
+
+  // ── Helpers ──
+  const COL_HEADER_BG  = "FF1F3864";
+  const COL_SUBHDR_BG  = "FF2E75B6";
+  const COL_WHITE      = "FFFFFFFF";
+  const COL_BLUE_LIGHT = "FFD6E4F0";
+  const COL_GREEN_BG   = "FFC6EFCE";
+  const COL_GREEN_FG   = "FF006100";
+  const COL_RED_BG     = "FFFFC7CE";
+  const COL_RED_FG     = "FF9C0006";
+  const COL_YELLOW_BG  = "FFFFEB9C";
+  const COL_YELLOW_FG  = "FF7F6000";
+  const COL_MOROSO_BG  = "FFC00000";
+
+  const border = {
+    top:{style:"thin",color:{argb:"FFB0B0B0"}},
+    left:{style:"thin",color:{argb:"FFB0B0B0"}},
+    bottom:{style:"thin",color:{argb:"FFB0B0B0"}},
+    right:{style:"thin",color:{argb:"FFB0B0B0"}}
+  };
+
+  function styleHeader(row, bgArgb, fgArgb="FFFFFFFF", fontSize=11) {
+    row.eachCell(cell=>{
+      cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:bgArgb}};
+      cell.font={bold:true,color:{argb:fgArgb},size:fontSize};
+      cell.alignment={vertical:"middle",horizontal:"center",wrapText:true};
+      cell.border=border;
+    });
+  }
+
+  function styleDataRow(row, bgArgb, fgArgb="FF1F2D3D", bold=false) {
+    row.eachCell(cell=>{
+      cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:bgArgb}};
+      cell.font={bold,color:{argb:fgArgb},size:10};
+      cell.alignment={vertical:"middle",horizontal:"left",wrapText:false};
+      cell.border=border;
+    });
+  }
 
   // ── SHEET 1: RESUMEN ANUAL ──
-  const resumen=[["RESUMEN ANUAL "+year,"","",""],["","","",""],
-    ["Mes","Ingresos (€)","Gastos (€)","Inversiones (€)","Profit (€)"]];
+  const ws1 = wb.addWorksheet("Resumen");
+  ws1.columns=[{width:30},{width:16},{width:16},{width:18},{width:15}];
+  const t1=ws1.addRow([`RESUMEN ANUAL ${year} — hasta ${monthNames[cutIdx]} ${year}`,"","","",""]);
+  ws1.mergeCells(`A${t1.number}:E${t1.number}`);
+  styleHeader(t1, COL_HEADER_BG, "FFFFFFFF", 13);
+  ws1.addRow([]);
+  const h1=ws1.addRow(["Mes","Ingresos (€)","Gastos (€)","Inversiones (€)","Profit (€)"]);
+  styleHeader(h1, COL_SUBHDR_BG);
   let totI=0,totG=0,totInv=0;
-  months.forEach(m=>{
+  months.forEach((m,i)=>{
     const ing=tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((s,t)=>s+(t.rent||0),0);
     const gas=tenants.reduce((s,t)=>s+(t.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
     const inv=tenants.reduce((s,t)=>s+(t.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((ss,c)=>ss+(c.amount||0),0),0);
     totI+=ing;totG+=gas;totInv+=inv;
-    resumen.push([m,ing,gas,inv,ing-gas-inv]);
+    const dr=ws1.addRow([m,ing,gas,inv,ing-gas-inv]);
+    styleDataRow(dr, i%2===0?COL_WHITE:COL_BLUE_LIGHT);
+    // Colorear profit
+    const profitCell=dr.getCell(5);
+    const profit=ing-gas-inv;
+    profitCell.fill={type:"pattern",pattern:"solid",fgColor:{argb:profit>=0?COL_GREEN_BG:COL_RED_BG}};
+    profitCell.font={bold:true,color:{argb:profit>=0?COL_GREEN_FG:COL_RED_FG},size:10};
   });
-  resumen.push(["","","","",""]);
-  resumen.push(["TOTAL",totI,totG,totInv,totI-totG-totInv]);
-  const ws1=XLSX.utils.aoa_to_sheet(resumen);
-  ws1["!cols"]=[{wch:20},{wch:15},{wch:15},{wch:16},{wch:12}];
-  XLSX.utils.book_append_sheet(wb,ws1,"Resumen");
+  ws1.addRow([]);
+  const totRow1=ws1.addRow(["TOTAL",totI,totG,totInv,totI-totG-totInv]);
+  styleHeader(totRow1, COL_YELLOW_BG, COL_YELLOW_FG);
 
   // ── SHEET 2: PAGOS ──
-  const pagosData=[["PAGOS INQUILINOS "+year],["Inquilino","Piso","Alquiler/mes",...months]];
-  tenants.forEach(ten=>{
-    const row=[ten.name,ten.unit,ten.rent+"€"];
-    months.forEach(m=>{const p=(ten.payments||{})[m];row.push(p?.paid?"✓ "+p.date:"✗ Pendiente");});
-    pagosData.push(row);
-  });
-  const ws2=XLSX.utils.aoa_to_sheet(pagosData);
-  ws2["!cols"]=[{wch:20},{wch:15},{wch:14},...months.map(()=>({wch:14}))];
-  XLSX.utils.book_append_sheet(wb,ws2,"Pagos");
-
-  // ── SHEET 3: GASTOS E INVERSIONES ──
-  const gastosData=[["GASTOS E INVERSIONES "+year],["Inquilino","Concepto","Tipo","Mes","Importe (€)","Nota"]];
-  tenants.forEach(ten=>{
-    (ten.costs||[]).filter(c=>c.month?.includes(String(year))).forEach(c=>{
-      gastosData.push([ten.name,c.icon+" "+c.name,c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto",c.month,c.amount,c.nota||""]);
+  const ws2 = wb.addWorksheet("Pagos");
+  ws2.columns=[{width:24},{width:14},{width:14},...months.map(()=>({width:20}))];
+  const t2=ws2.addRow([`PAGOS INQUILINOS ${year} — hasta ${monthNames[cutIdx]} ${year}`,...Array(months.length+2).fill("")]);
+  ws2.mergeCells(`A${t2.number}:${String.fromCharCode(67+months.length)}${t2.number}`);
+  styleHeader(t2, COL_HEADER_BG, "FFFFFFFF", 13);
+  const h2=ws2.addRow(["Inquilino","Piso","Alquiler/mes",...months]);
+  styleHeader(h2, COL_SUBHDR_BG);
+  tenants.forEach((ten,ti)=>{
+    const rowData=[ten.name, ten.unit, ten.rent+"€"];
+    months.forEach(m=>{
+      const p=(ten.payments||{})[m];
+      rowData.push(p?.paid ? "✓ Pagado" : "✗ Pendiente");
+    });
+    const dr=ws2.addRow(rowData);
+    // Nombre/piso/alquiler
+    [1,2,3].forEach(c=>{
+      const cell=dr.getCell(c);
+      cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:ti%2===0?COL_WHITE:COL_BLUE_LIGHT}};
+      cell.font={bold:true,color:{argb:"FF1F2D3D"},size:10};
+      cell.border=border;
+      cell.alignment={vertical:"middle"};
+    });
+    // Meses con color rojo/verde
+    months.forEach((_,mi)=>{
+      const paid=(ten.payments||{})[months[mi]]?.paid;
+      const cell=dr.getCell(4+mi);
+      cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:paid?COL_GREEN_BG:COL_RED_BG}};
+      cell.font={bold:true,color:{argb:paid?COL_GREEN_FG:COL_RED_FG},size:10};
+      cell.alignment={vertical:"middle",horizontal:"center"};
+      cell.border=border;
     });
   });
-  const ws3=XLSX.utils.aoa_to_sheet(gastosData);
-  ws3["!cols"]=[{wch:20},{wch:20},{wch:14},{wch:16},{wch:12},{wch:30}];
-  XLSX.utils.book_append_sheet(wb,ws3,"Gastos");
+  // Fila separadora
+  ws2.addRow([]);
+  // Fila PENDIENTE DE COBRO
+  const pendRow=ws2.addRow(["PENDIENTE DE COBRO","","",...months.map(m=>{
+    const p=tenants.filter(t=>!(t.payments||{})[m]?.paid).reduce((s,t)=>s+(t.rent||0),0);
+    return p>0?p+"€":"0€";
+  })]);
+  styleHeader(pendRow, COL_RED_BG, COL_RED_FG);
+  // Fila COBRADO
+  const cobRow=ws2.addRow(["COBRADO","","",...months.map(m=>{
+    const c=tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((s,t)=>s+(t.rent||0),0);
+    return c>0?c+"€":"0€";
+  })]);
+  styleHeader(cobRow, COL_GREEN_BG, COL_GREEN_FG);
 
-  // ── SHEET 4: INQUILINOS ──
-  const tenantsData=[["INQUILINOS "+year],["Nombre","Piso","Teléfono","Email","Alquiler","Inicio contrato","Fin contrato"]];
+  // ── SHEET 3: MOROSOS ──
+  const ws3 = wb.addWorksheet("Morosos");
+  ws3.columns=[{width:26},{width:14},{width:16},{width:20},{width:16}];
+  const t3=ws3.addRow([`⚠ MOROSOS — Impagos hasta ${monthNames[cutIdx]} ${year}`,"","","",""]);
+  ws3.mergeCells(`A${t3.number}:E${t3.number}`);
+  styleHeader(t3, COL_MOROSO_BG, "FFFFFFFF", 13);
+  const h3=ws3.addRow(["Inquilino","Piso","Teléfono","Mes impagado","Importe (€)"]);
+  styleHeader(h3, COL_SUBHDR_BG);
+  let hayMorosos=false;
+  let rowIdx=0;
   tenants.forEach(ten=>{
-    tenantsData.push([ten.name,ten.unit,ten.phone||"",ten.email||"",ten.rent+"€",ten.contractStart||"",ten.contractEnd||""]);
+    months.forEach(m=>{
+      if(!(ten.payments||{})[m]?.paid){
+        const dr=ws3.addRow([ten.name,ten.unit,ten.phone||"—",m,ten.rent||0]);
+        styleDataRow(dr, rowIdx%2===0?COL_WHITE:COL_BLUE_LIGHT);
+        rowIdx++;
+        hayMorosos=true;
+      }
+    });
   });
-  const ws4=XLSX.utils.aoa_to_sheet(tenantsData);
-  ws4["!cols"]=[{wch:22},{wch:15},{wch:14},{wch:26},{wch:12},{wch:16},{wch:16}];
-  XLSX.utils.book_append_sheet(wb,ws4,"Inquilinos");
+  if(!hayMorosos){
+    const noRow=ws3.addRow(["✅ Sin morosos en este periodo","","","",""]);
+    ws3.mergeCells(`A${noRow.number}:E${noRow.number}`);
+    styleDataRow(noRow, COL_GREEN_BG, COL_GREEN_FG, true);
+  }
+  ws3.addRow([]);
+  const totalMoroso=tenants.reduce((s,ten)=>s+months.filter(m=>!(ten.payments||{})[m]?.paid).length*(ten.rent||0),0);
+  const totM=ws3.addRow(["TOTAL PENDIENTE","","","",totalMoroso]);
+  styleHeader(totM, COL_YELLOW_BG, COL_YELLOW_FG);
 
-  XLSX.writeFile(wb,`MiAlquiler_Resumen_${year}.xlsx`);
-  return {year, filename:`MiAlquiler_Resumen_${year}.xlsx`, date:new Date().toLocaleDateString("es-ES"), totI, totG, totInv, profit:totI-totG-totInv};
+  // ── SHEET 4: GASTOS ──
+  const ws4 = wb.addWorksheet("Gastos");
+  ws4.columns=[{width:22},{width:24},{width:14},{width:18},{width:14},{width:32}];
+  const t4=ws4.addRow([`GASTOS E INVERSIONES ${year} — hasta ${monthNames[cutIdx]} ${year}`,"","","","",""]);
+  ws4.mergeCells(`A${t4.number}:F${t4.number}`);
+  styleHeader(t4, COL_HEADER_BG, "FFFFFFFF", 13);
+  const h4=ws4.addRow(["Inquilino","Concepto","Tipo","Mes","Importe (€)","Nota"]);
+  styleHeader(h4, COL_SUBHDR_BG);
+  let gi=0;
+  tenants.forEach(ten=>{
+    (ten.costs||[]).filter(c=>c.month?.includes(String(year))&&months.includes(c.month)).forEach(c=>{
+      const dr=ws4.addRow([ten.name,(c.icon||"")+" "+c.name,c.tipo==="inversion"?"Inversión":c.tipo==="gestion"?"Gestión":"Gasto",c.month,c.amount,c.nota||""]);
+      styleDataRow(dr, gi%2===0?COL_WHITE:COL_BLUE_LIGHT);
+      gi++;
+    });
+  });
+
+  // ── SHEET 5: INQUILINOS ──
+  const ws5 = wb.addWorksheet("Inquilinos");
+  ws5.columns=[{width:24},{width:16},{width:14},{width:28},{width:13},{width:17},{width:17}];
+  const t5=ws5.addRow(["INQUILINOS "+year,"","","","","",""]);
+  ws5.mergeCells(`A${t5.number}:G${t5.number}`);
+  styleHeader(t5, COL_HEADER_BG, "FFFFFFFF", 13);
+  const h5=ws5.addRow(["Nombre","Piso","Teléfono","Email","Alquiler","Inicio contrato","Fin contrato"]);
+  styleHeader(h5, COL_SUBHDR_BG);
+  tenants.forEach((ten,i)=>{
+    const dr=ws5.addRow([ten.name,ten.unit,ten.phone||"",ten.email||"",ten.rent+"€",ten.contractStart||"",ten.contractEnd||""]);
+    styleDataRow(dr, i%2===0?COL_WHITE:COL_BLUE_LIGHT);
+  });
+
+  // ── Guardar ──
+  const filename=`MiAlquiler_${year}_hasta_${monthNames[cutIdx]}.xlsx`;
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+  saveAs(blob, filename);
+  return {year,filename,date:new Date().toLocaleDateString("es-ES"),totI,totG,totInv,profit:totI-totG-totInv};
 }
 
 function generateContractDocx(data) {
@@ -1051,7 +1186,7 @@ export default function App() {
       if(page==="maintenance")return<Maintenance t={t} tenants={tenants} onStatus={changeStatus}/>;
       if(page==="calendar")return<CalendarPage t={t} tenants={tenants}/>;
       if(page==="messages")return<OwnerMessages t={t} tenants={tenants} ownerId={user.uid}/>;
-      if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year)=>{const info=generateAnnualExcel(tenants,year);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
+      if(page==="documentos")return<DocumentsPage t={t} tenants={tenants} documents={documents} onGenerate={async(year,upToMonthIndex)=>{const info=generateAnnualExcel(tenants,year,upToMonthIndex);await saveDocument(info);showToast("✅ "+t.docGenerated+" "+year);}}/>;
       if(page==="contratos")return<ContractsPage t={t} contracts={contracts} onNew={()=>setModal({type:"new-contract"})} onUpload={()=>setModal({type:"upload-contract"})} onDownload={(c)=>generateContractDocx(c)} onDelete={deleteContract}/>;
       if(page==="facturas")return<InvoicesPage t={t} tenants={tenants} invoices={invoices.filter(i=>!currentProp||i.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-invoice",tenantId})} onDelete={deleteInvoice}/>;
       if(page==="recibos")return<ReceiptsPage t={t} tenants={tenants} receipts={receipts.filter(r=>!currentProp||r.propId===currentProp.id)} onNew={(tenantId)=>setModal({type:"new-receipt",tenantId})} onDelete={deleteReceipt}/>;
@@ -1496,14 +1631,18 @@ function Finances(props){
   for(let y=startYear;y<endYear;y++) monthNames.forEach(m=>allMonths.push(`${m} ${y}`));
 
   const [selYear,setSelYear]=useState(now.getFullYear());
-  const [tab,setTab]=useState("pagos"); // pagos | gastos | graficos
+  const [selMonth,setSelMonth]=useState(null); // null = todos los meses
+  const [tab,setTab]=useState("pagos");
   const [openBuilding,setOpenBuilding]=useState(null);
   const [verTodo,setVerTodo]=useState(false);
   const years=Array.from({length:15},(_,i)=>startYear+i);
   const monthsOfYear=monthNames.map(m=>`${m} ${selYear}`);
+  // Meses filtrados: si hay mes seleccionado solo ese, si no todos
+  const filteredMonths=selMonth!==null?[`${monthNames[selMonth]} ${selYear}`]:monthsOfYear;
   const buildings=(props.buildings||[]).filter(b=>b);
   const getTenantsByBuilding=(b)=>tenants.filter(t=>t.building===b);
-  const getBuildingColor=(_,i)=>["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"][i%7];
+  const BUILDING_COLORS=["#7A9E7E","#C4622D","#4F46E5","#D4A853","#D94F3D","#4A9B6F","#8C7B6E"];
+  const getBuildingColor=(b)=>{const idx=buildings.indexOf(b);return BUILDING_COLORS[idx>=0?idx%7:0];};
 
   // Chart data for selected year
   const chartData=monthsOfYear.map(m=>{
@@ -1514,19 +1653,24 @@ function Finances(props){
     return{name:m.split(" ")[0].slice(0,3),Ingresos:ingresos,Gastos:gastos,Inversión:inversion,Profit:profit};
   });
 
-  // Yearly totals
-  const totalIngresos=chartData.reduce((s,d)=>s+d.Ingresos,0);
-  const totalGastos=chartData.reduce((s,d)=>s+d.Gastos,0);
-  const totalInversion=chartData.reduce((s,d)=>s+d.Inversión,0);
+  // Totals for filtered period
+  const totalIngresos=filteredMonths.reduce((s,m)=>s+tenants.filter(ten=>(ten.payments||{})[m]?.paid).reduce((ss,ten)=>ss+(ten.rent||0),0),0);
+  const totalGastos=filteredMonths.reduce((s,m)=>s+tenants.reduce((ss,ten)=>ss+(ten.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
+  const totalInversion=filteredMonths.reduce((s,m)=>s+tenants.reduce((ss,ten)=>ss+(ten.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
   const totalProfit=totalIngresos-totalGastos-totalInversion;
+  const periodoLabel=selMonth!==null?`${monthNames[selMonth]} ${selYear}`:String(selYear);
 
   return(
     <div>
       <div className="page-hd" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
         <h2>{t.finances}</h2>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <select className="status-sel" style={{padding:"8px 12px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
+          <select className="status-sel" style={{padding:"8px 12px",fontSize:14}} value={selYear} onChange={e=>{setSelYear(parseInt(e.target.value));setSelMonth(null);}}>
             {years.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+          <select className="status-sel" style={{padding:"8px 12px",fontSize:14}} value={selMonth===null?"all":selMonth} onChange={e=>setSelMonth(e.target.value==="all"?null:parseInt(e.target.value))}>
+            <option value="all">Todos los meses</option>
+            {monthNames.map((m,i)=><option key={i} value={i}>{m}</option>)}
           </select>
         </div>
       </div>
@@ -1548,26 +1692,26 @@ function Finances(props){
 
       {/* RESUMEN ANUAL */}
       <div className="stats" style={{marginBottom:20}}>
-        <div className="stat sl"><div className="lbl">Ingresos {selYear}</div><div className="val">{totalIngresos}€</div></div>
-        <div className="stat rl"><div className="lbl">Gastos {selYear}</div><div className="val">{totalGastos}€</div></div>
-        <div className="stat gl"><div className="lbl">Inversión {selYear}</div><div className="val">{totalInversion}€</div></div>
-        <div className="stat tl"><div className="lbl">Profit {selYear}</div><div className="val" style={{color:totalProfit>=0?"var(--green)":"var(--red)"}}>{totalProfit}€</div></div>
+        <div className="stat sl"><div className="lbl">Ingresos {periodoLabel}</div><div className="val">{totalIngresos.toFixed(2)}€</div></div>
+        <div className="stat rl"><div className="lbl">Gastos {periodoLabel}</div><div className="val">{totalGastos.toFixed(2)}€</div></div>
+        <div className="stat gl"><div className="lbl">Inversión {periodoLabel}</div><div className="val">{totalInversion.toFixed(2)}€</div></div>
+        <div className="stat tl"><div className="lbl">Profit {periodoLabel}</div><div className="val" style={{color:totalProfit>=0?"var(--green)":"var(--red)"}}>{totalProfit.toFixed(2)}€</div></div>
       </div>
 
       {/* TAB PAGOS */}
       {tab==="pagos"&&verTodo&&(
         <div className="card">
-          <div className="card-title">💶 {t.paymentHistory} · {selYear} — Todas las naves</div>
+          <div className="card-title">💶 {t.paymentHistory} · {periodoLabel} — Todas las naves</div>
           <div className="tbl-wrap">
             <table>
-              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
+              <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.unit}</th><th>{t.rent}</th>{filteredMonths.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
               <tbody>
                 {tenants.map(ten=>(
                   <tr key={ten.id}>
                     <td><strong>{ten.name}</strong></td>
                     <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
                     <td>{ten.unit}</td><td>{ten.rent}€</td>
-                    {monthsOfYear.map(m=>{
+                    {filteredMonths.map(m=>{
                       const p=(ten.payments||{})[m];
                       return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
                     })}
@@ -1585,13 +1729,13 @@ function Finances(props){
             if(bTenants.length===0)return null;
             const isOpen=openBuilding===b;
             const totalRent=bTenants.reduce((s,t)=>s+(t.rent||0),0);
-            const paidThisMonth=bTenants.filter(t=>{const m=monthsOfYear[now.getMonth()];return(t.payments||{})[m]?.paid;}).length;
+            const paidThisMonth=bTenants.filter(t=>{const m=filteredMonths[filteredMonths.length-1];return(t.payments||{})[m]?.paid;}).length;
             return(
               <div key={b} style={{marginBottom:12,borderRadius:14,overflow:"hidden",border:"1px solid var(--border)"}}>
                 <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:b)}>
                   <div>
                     <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
-                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bTenants.length} inquilinos · {totalRent}€/mes · {paidThisMonth}/{bTenants.length} pagados</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bTenants.length} inquilinos · {totalRent.toFixed(2)}€/mes · {paidThisMonth}/{bTenants.length} pagados</div>
                   </div>
                   <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
                 </div>
@@ -1599,12 +1743,12 @@ function Finances(props){
                   <div style={{padding:8,background:"white"}}>
                     <div className="tbl-wrap">
                       <table>
-                        <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{monthsOfYear.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
+                        <thead><tr><th>{t.name}</th><th>{t.unit}</th><th>{t.rent}</th>{filteredMonths.map(m=><th key={m}>{m.split(" ")[0].slice(0,3)}</th>)}</tr></thead>
                         <tbody>
                           {bTenants.map(ten=>(
                             <tr key={ten.id}>
                               <td><strong>{ten.name}</strong></td><td>{ten.unit}</td><td>{ten.rent}€</td>
-                              {monthsOfYear.map(m=>{
+                              {filteredMonths.map(m=>{
                                 const p=(ten.payments||{})[m];
                                 return(<td key={m}><span className="badge" style={p?.paid?{background:"#E6F4ED",color:"#4A9B6F",cursor:"pointer"}:{background:"#FDECEA",color:"#D94F3D",cursor:"pointer"}} onClick={()=>onToggle(ten.id,m)}>{p?.paid?"✓":"✗"}</span></td>);
                               })}
@@ -1624,18 +1768,18 @@ function Finances(props){
       {/* TAB GASTOS */}
       {tab==="gastos"&&verTodo&&(
         <div className="card">
-          <div className="card-title">⚡ {t.costBreakdown} · {selYear} — Todas las naves</div>
+          <div className="card-title">⚡ {t.costBreakdown} · {periodoLabel} — Todas las naves</div>
           <div className="tbl-wrap">
             <table>
               <thead><tr><th>{t.name}</th><th>Nave</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
               <tbody>
-                {tenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>(
+                {tenants.flatMap(ten=>(ten.costs||[]).filter(c=>filteredMonths.includes(c.month)).map(c=>(
                   <tr key={c.id}>
                     <td>{ten.name}</td>
                     <td style={{fontSize:11,color:"var(--warm)"}}>{ten.building||"—"}</td>
                     <td><div>{c.icon} {c.name}</div>{c.nota&&<div style={{fontSize:11,color:"var(--warm)"}}>📝 {c.nota}</div>}</td>
-                    <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>{c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}</span></td>
-                    <td>{c.month}</td><td>{c.amount}€</td>
+                    <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:c.tipo==="gestion"?{background:"#E0F2FE",color:"#0369A1"}:{background:"#FDF6E3",color:"#D4A853"}}>{c.tipo==="inversion"?"🏗️ Inversión":c.tipo==="gestion"?"📂 Gestión":"💸 Gasto"}</span></td>
+                    <td>{c.month}</td><td>{Number(c.amount).toFixed(2)}€</td>
                     <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(ten.id,c.id)}>🗑️</button></td>
                   </tr>
                 )))}
@@ -1649,7 +1793,7 @@ function Finances(props){
         <div>
           {buildings.map(b=>{
             const bTenants=getTenantsByBuilding(b);
-            const bCosts=bTenants.flatMap(ten=>(ten.costs||[]).filter(c=>c.month?.includes(String(selYear))).map(c=>({...c,tenantName:ten.name,tenantId:ten.id})));
+            const bCosts=bTenants.flatMap(ten=>(ten.costs||[]).filter(c=>filteredMonths.includes(c.month)).map(c=>({...c,tenantName:ten.name,tenantId:ten.id})));
             if(bTenants.length===0)return null;
             const isOpen=openBuilding===("g_"+b);
             const totalCosts=bCosts.reduce((s,c)=>s+(c.amount||0),0);
@@ -1658,14 +1802,14 @@ function Finances(props){
                 <div style={{background:getBuildingColor(b),color:"white",padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setOpenBuilding(isOpen?null:"g_"+b)}>
                   <div>
                     <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16}}>🏢 {b}</div>
-                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bCosts.length} gastos · Total: {totalCosts}€</div>
+                    <div style={{fontSize:12,opacity:.85,marginTop:2}}>{bCosts.length} gastos · Total: {totalCosts.toFixed(2)}€</div>
                   </div>
                   <div style={{fontSize:20}}>{isOpen?"▲":"▼"}</div>
                 </div>
                 {isOpen&&(
                   <div style={{padding:8,background:"white"}}>
                     {bCosts.length===0
-                      ?<p style={{fontSize:13,color:"var(--warm)",padding:12}}>No hay gastos en {selYear}</p>
+                      ?<p style={{fontSize:13,color:"var(--warm)",padding:12}}>No hay gastos en {periodoLabel}</p>
                       :<div className="tbl-wrap">
                         <table>
                           <thead><tr><th>{t.name}</th><th>{t.concept}</th><th>Tipo</th><th>{t.month}</th><th>{t.amount}</th><th></th></tr></thead>
@@ -1677,11 +1821,11 @@ function Finances(props){
                                   <div>{c.icon} {c.name}</div>
                                   {c.nota&&<div style={{fontSize:11,color:"var(--warm)",marginTop:2}}>📝 {c.nota}</div>}
                                 </td>
-                                <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:{background:"#FDF6E3",color:"#D4A853"}}>
-                                  {c.tipo==="inversion"?"🏗️ Inversión":"💸 Gasto"}
+                                <td><span className="badge" style={c.tipo==="inversion"?{background:"#EEF2FF",color:"#4F46E5"}:c.tipo==="gestion"?{background:"#E0F2FE",color:"#0369A1"}:{background:"#FDF6E3",color:"#D4A853"}}>
+                                  {c.tipo==="inversion"?"🏗️ Inversión":c.tipo==="gestion"?"📂 Gestión":"💸 Gasto"}
                                 </span></td>
                                 <td>{c.month}</td>
-                                <td>{c.amount}€</td>
+                                <td>{Number(c.amount).toFixed(2)}€</td>
                                 <td><button className="btn btn-o btn-sm" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={()=>onDeleteCost(c.tenantId,c.id)}>🗑️</button></td>
                               </tr>
                             ))}
@@ -2422,6 +2566,19 @@ function TenantProfileModal({t,tenant,onToggle,onAddCost,onDeleteCost,onClose,on
               </div>
             </div>
           )}
+          {(tenant.docType==="factura"||tenant.docType==="ambos")&&(
+            <div style={{marginTop:10,background:"#EEF2FF",borderRadius:10,padding:10,border:"1px solid #C7D2FE",fontSize:13}}>
+              <div style={{fontWeight:600,color:"#4F46E5",marginBottom:6,fontSize:12}}>🪪 Datos fiscales</div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}>
+                <span style={{color:"var(--warm)"}}>DNI / NIE</span>
+                <strong>{tenant.dni||"—"}</strong>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}>
+                <span style={{color:"var(--warm)"}}>NIF empresa</span>
+                <strong>{tenant.nif||"—"}</strong>
+              </div>
+            </div>
+          )}
         </div>
         {tenant.notes&&<div style={{gridColumn:"1/-1"}}>
           <div className="pf-lbl">📝 Notas</div>
@@ -2493,7 +2650,9 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
     payFreq:tenant?.payFreq||"mensual",fianza:tenant?.fianza||"no",
     fianzaAmount:tenant?.fianzaAmount||"",notes:tenant?.notes||"",
     rentRecibo:tenant?.rentRecibo||"",rentFactura:tenant?.rentFactura||"",
-    ipc:tenant?.ipc||"no"
+    ipc:tenant?.ipc||"no",
+    dni:tenant?.dni||"",
+    nif:tenant?.nif||""
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(!tenant)return null;
@@ -2535,6 +2694,22 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
               <div className="fg"><label>Importe Factura €</label><input type="number" placeholder="0" value={form.rentFactura||""} onChange={e=>set("rentFactura",e.target.value)}/></div>
             </div>
             {form.rentRecibo&&form.rentFactura&&<p style={{fontSize:11,marginTop:4,color:"var(--sage)",fontWeight:600}}>Total: {(parseFloat(form.rentRecibo||0)+parseFloat(form.rentFactura||0))}€</p>}
+          </div>
+        )}
+        {/* DNI / NIF — solo visible si el tipo es factura o ambos */}
+        {(form.docType==="factura"||form.docType==="ambos")&&(
+          <div style={{marginTop:12,background:"#EEF2FF",borderRadius:10,padding:12,border:"1px solid #C7D2FE"}}>
+            <p style={{fontSize:12,color:"#4F46E5",fontWeight:600,marginBottom:8}}>🪪 Datos fiscales del cliente (necesarios para la factura)</p>
+            <div className="gr2">
+              <div className="fg">
+                <label>DNI / NIE</label>
+                <input value={form.dni} onChange={e=>set("dni",e.target.value)} placeholder="12345678A"/>
+              </div>
+              <div className="fg">
+                <label>NIF empresa</label>
+                <input value={form.nif} onChange={e=>set("nif",e.target.value)} placeholder="B12345678"/>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -2686,11 +2861,11 @@ function AddCostModal({t,tenants,onSave,onClose}){
 
   const [tid,setTid]=useState(tenants[0]?.id||"");
   const [costType,setCostType]=useState("💡 Electricidad");
-  const [tipo,setTipo]=useState("gasto"); // gasto | inversion
+  const [tipo,setTipo]=useState("gasto"); // gasto | inversion | gestion
   const [amount,setAmount]=useState("");
   const [month,setMonth]=useState(currentMonth);
   const [nota,setNota]=useState("");
-  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","Otro":"📋"};
+  const icons={"💡 Electricidad":"💡","💧 Agua":"💧","🌡️ Calefacción":"🌡️","🗑️ Basuras":"🗑️","🏗️ Inversión":"🏗️","📂 Gestión":"📂","Otro":"📋"};
   const handle=()=>{
     if(!amount)return;
     const icon=icons[costType]||"📋";
@@ -2702,15 +2877,17 @@ function AddCostModal({t,tenants,onSave,onClose}){
       <div className="modal-hd"><h3>➕ {t.addCost}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
       <div className="fg"><label>{t.tenant}</label><select value={tid} onChange={e=>setTid(e.target.value)}>{tenants.map(ten=><option key={ten.id} value={ten.id}>{ten.name} ({ten.unit})</option>)}</select></div>
       <div className="fg">
-        <label>Tipo</label>
-        <div style={{display:"flex",gap:10,marginTop:4}}>
+        <label>Tipo de gasto</label>
+        <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
           <button className={`btn btn-sm ${tipo==="gasto"?"btn-p":"btn-o"}`} onClick={()=>setTipo("gasto")}>💸 Gasto</button>
-          <button className={`btn btn-sm ${tipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setTipo("inversion")}>🏗️ Inversión (mía)</button>
+          <button className={`btn btn-sm ${tipo==="gestion"?"btn-s":"btn-o"}`} style={tipo==="gestion"?{background:"#0EA5E9",borderColor:"#0EA5E9",color:"white"}:{}} onClick={()=>setTipo("gestion")}>📂 Gestión</button>
+          <button className={`btn btn-sm ${tipo==="inversion"?"btn-s":"btn-o"}`} onClick={()=>setTipo("inversion")}>🏗️ Inversión</button>
         </div>
+        {tipo==="gestion"&&<p style={{fontSize:12,color:"#0EA5E9",marginTop:6}}>Gastos de gestión: honorarios, gestoría, notaría, etc.</p>}
         {tipo==="inversion"&&<p style={{fontSize:12,color:"var(--warm)",marginTop:6}}>Esta inversión la asumes tú, no se carga al inquilino</p>}
       </div>
       <div className="gr2">
-        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
+        <div className="fg"><label>{t.concept}</label><select value={costType} onChange={e=>setCostType(e.target.value)}>{["💡 Electricidad","💧 Agua","🌡️ Calefacción","🗑️ Basuras","🏗️ Inversión","📂 Gestión","Otro"].map(o=><option key={o}>{o}</option>)}</select></div>
         <div className="fg"><label>{t.amount}</label><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"/></div>
       </div>
       <div className="fg"><label>{t.month}</label>
@@ -2725,25 +2902,28 @@ function AddCostModal({t,tenants,onSave,onClose}){
 }
 
 function DocumentsPage({t,tenants,documents,onGenerate}){
-  const startYear=2024; const endYear=startYear+15;
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const startYear=2024;
   const years=Array.from({length:15},(_,i)=>startYear+i);
   const now=new Date();
   const [selYear,setSelYear]=useState(now.getFullYear());
+  const [selMonth,setSelMonth]=useState(now.getMonth()); // 0-11
   const [generating,setGenerating]=useState(false);
 
   const handle=async()=>{
     setGenerating(true);
-    await onGenerate(selYear);
+    await onGenerate(selYear,selMonth);
     setGenerating(false);
   };
 
-  // Summary for selected year
-  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-  const months=monthNames.map(m=>`${m} ${selYear}`);
+  // Summary for selected year up to selMonth
+  const months=monthNames.slice(0,selMonth+1).map(m=>`${m} ${selYear}`);
   const totI=months.reduce((s,m)=>s+tenants.filter(t=>(t.payments||{})[m]?.paid).reduce((ss,t)=>ss+(t.rent||0),0),0);
   const totG=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo!=="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
   const totInv=months.reduce((s,m)=>s+tenants.reduce((ss,t)=>ss+(t.costs||[]).filter(c=>c.month===m&&c.tipo==="inversion").reduce((sss,c)=>sss+(c.amount||0),0),0),0);
   const profit=totI-totG-totInv;
+  // Morosos: inquilinos con algún mes sin pagar en el rango
+  const morososCount=tenants.filter(ten=>months.some(m=>!(ten.payments||{})[m]?.paid)).length;
 
   return(
     <div>
@@ -2751,31 +2931,48 @@ function DocumentsPage({t,tenants,documents,onGenerate}){
 
       <div className="card">
         <div className="card-title">📊 {t.generateExcel}</div>
-        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:20}}>
-          <select className="status-sel" style={{padding:"10px 14px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
-            {years.map(y=><option key={y} value={y}>{y}</option>)}
-          </select>
-          <button className="btn btn-p" onClick={handle} disabled={generating}>
-            {generating?"⏳ Generando...":"📥 Generar Excel "+selYear}
-          </button>
+
+        {/* Selectores año + mes */}
+        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:8}}>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <label style={{fontSize:11,color:"var(--warm)",fontWeight:600,textTransform:"uppercase",letterSpacing:".5px"}}>Año</label>
+            <select className="status-sel" style={{padding:"10px 14px",fontSize:14}} value={selYear} onChange={e=>setSelYear(parseInt(e.target.value))}>
+              {years.map(y=><option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <label style={{fontSize:11,color:"var(--warm)",fontWeight:600,textTransform:"uppercase",letterSpacing:".5px"}}>Hasta el mes</label>
+            <select className="status-sel" style={{padding:"10px 14px",fontSize:14}} value={selMonth} onChange={e=>setSelMonth(parseInt(e.target.value))}>
+              {monthNames.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
+            </select>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <label style={{fontSize:11,color:"transparent",fontWeight:600}}>—</label>
+            <button className="btn btn-p" onClick={handle} disabled={generating}>
+              {generating?"⏳ Generando...`":"📥 Generar Excel "+selYear+" · "+monthNames[selMonth]}
+            </button>
+          </div>
         </div>
+        <p style={{fontSize:12,color:"var(--warm)",marginBottom:16}}>
+          El Excel incluirá: Resumen · Pagos · <strong style={{color:"#C00000"}}>Morosos ({morososCount})</strong> · Gastos · Inquilinos
+        </p>
 
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:8}}>
           <div style={{background:"#E6F4ED",borderRadius:12,padding:"14px 16px"}}>
             <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INGRESOS {selYear}</div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--green)"}}>{totI}€</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--green)"}}>{totI.toFixed(2)}€</div>
           </div>
           <div style={{background:"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
             <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>GASTOS {selYear}</div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--red)"}}>{totG}€</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--red)"}}>{totG.toFixed(2)}€</div>
           </div>
           <div style={{background:"#EEF2FF",borderRadius:12,padding:"14px 16px"}}>
             <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>INVERSIÓN {selYear}</div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#4F46E5"}}>{totInv}€</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#4F46E5"}}>{totInv.toFixed(2)}€</div>
           </div>
           <div style={{background:profit>=0?"#E6F4ED":"#FDECEA",borderRadius:12,padding:"14px 16px"}}>
             <div style={{fontSize:11,color:"var(--warm)",marginBottom:4}}>PROFIT {selYear}</div>
-            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:profit>=0?"var(--green)":"var(--red)"}}>{profit}€</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:profit>=0?"var(--green)":"var(--red)"}}>{profit.toFixed(2)}€</div>
           </div>
         </div>
         <p style={{fontSize:12,color:"var(--warm)",marginTop:8}}>El Excel incluye 4 hojas: Resumen, Pagos, Gastos e Inquilinos</p>
@@ -2790,10 +2987,10 @@ function DocumentsPage({t,tenants,documents,onGenerate}){
               <div>
                 <div style={{fontWeight:600,fontSize:15}}>📊 MiAlquiler_Resumen_{doc.year}.xlsx</div>
                 <div style={{fontSize:12,color:"var(--warm)",marginTop:3}}>
-                  Generado el {doc.date} · Ingresos: {doc.totI}€ · Gastos: {doc.totG}€ · Profit: <span style={{color:doc.profit>=0?"var(--green)":"var(--red)",fontWeight:600}}>{doc.profit}€</span>
+                  Generado el {doc.date} · Ingresos: {Number(doc.totI).toFixed(2)}€ · Gastos: {Number(doc.totG).toFixed(2)}€ · Profit: <span style={{color:doc.profit>=0?"var(--green)":"var(--red)",fontWeight:600}}>{Number(doc.profit).toFixed(2)}€</span>
                 </div>
               </div>
-              <button className="btn btn-o btn-sm" onClick={()=>generateAnnualExcel(tenants,doc.year)}>
+              <button className="btn btn-o btn-sm" onClick={()=>generateAnnualExcel(tenants,doc.year,11)}>
                 📥 {t.downloadDoc}
               </button>
             </div>
