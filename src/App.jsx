@@ -1086,7 +1086,7 @@ export default function App() {
         const inv={
           invoiceNum:nextNum, year, date:dateStr, concept,
           base, tenantId, tenantName:t2.name,
-          clientName:t2.name, clientNif:t2.dni||"",
+          clientName:t2.name, clientNif:t2.nif||t2.dni||"",
           clientAddress:t2.address||"", clientEmail:t2.email||""
         };
         await saveInvoice(inv);
@@ -2656,6 +2656,11 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(!tenant)return null;
+
+  const handleSave=()=>{
+    // Nos aseguramos que dni y nif siempre sean string antes de guardar
+    onSave(tenant.id,{...form, dni:form.dni||"", nif:form.nif||""});
+  };
   return(
     <div className="modal">
       <div className="modal-hd"><h3>✏️ {t.editTenant}</h3><button className="close-btn" onClick={onClose}>✕</button></div>
@@ -2747,7 +2752,7 @@ function EditTenantModal({t,tenant,onClose,onSave,propBuildings=[]}){
           </div>
         )}
       </div>
-      <button className="btn btn-p btn-full" onClick={()=>onSave(tenant.id,form)}>💾 {t.save}</button>
+      <button className="btn btn-p btn-full" onClick={handleSave}>💾 {t.save}</button>
     </div>
   );
 }
