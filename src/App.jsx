@@ -3578,7 +3578,10 @@ function NewInvoiceModal({t,tenant,invoices,onClose,onSave}){
     date:`${now.getDate()}/${now.getMonth()+1}/${year}`,
     concept:`Alquiler ${tenant?.unit||""} ${monthNames[now.getMonth()]} ${year}`,
     base:tenant?.rentFactura||tenant?.rent||"",
-    clientName:tenant?.name||"",clientNif:"",clientAddress:"",clientEmail:tenant?.email||""
+    clientName:tenant?.name||"",
+    clientNif:tenant?.nif||tenant?.dni||"",
+    clientAddress:tenant?.address||"",
+    clientEmail:tenant?.email||""
   });
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const base=parseFloat(form.base)||0;
